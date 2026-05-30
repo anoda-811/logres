@@ -1,13 +1,22 @@
 "use client";
 import React, { useRef, useEffect } from "react";
+import { useRouter } from "next/navigation";
 
 export default function GameCanvasIso() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const router = useRouter();
 
+  // 本体
   useEffect(() => {
+    console.log("effect start");
     const canvas = canvasRef.current!;
     const ctx = canvas.getContext("2d")!;
     let raf = 0;
+
+    let battleTransition = false;
+    let transitionProgress = 0;
+    let battleMonsterId: number | null = null;
+    let isTransitioning = false;
 
     // --- レイアウト / DPI 管理 ---
     let currentCssW = 0;
@@ -15,6 +24,7 @@ export default function GameCanvasIso() {
     let currentDpr = window.devicePixelRatio || 1;
 
     function resize() {
+      // 画面枠サイズ
       const cssW = Math.min(window.innerWidth, 1500);
       const cssH = Math.min(window.innerHeight, 800);
       currentCssW = cssW;
@@ -39,7 +49,7 @@ export default function GameCanvasIso() {
     window.addEventListener("resize", resize);
 
     // --- プレイ設定（既存値をそのまま） ---
-    const playArea = { x: 200, y: 60, w: 1300, h: 1300 };
+    const playArea = { x: 170, y: 60, w: 1300, h: 1300 }; // xyは始点マスの位置、whは全体のデカさ
     const cols = 15;
     const rows = 15;
     const tileW = Math.floor(playArea.w / cols);
@@ -48,8 +58,34 @@ export default function GameCanvasIso() {
 
     // 岩設置
     const blocked: { col: number; row: number }[] = [
-      { col: 0, row: 0 }, { col: 3, row: 2 }, { col: 4, row: 2 }, { col: 6, row: 4 }, { col: 2, row: 5 }
+      { col: 0, row: 0 }, 
+      { col: 2, row: 5 },
+      { col: 3, row: 2 }, 
+      { col: 4, row: 2 }, 
+      { col: 5, row: 2 }, 
+      { col: 6, row: 2 }, { col: 6, row: 3 }, { col: 6, row: 4 }
     ];
+
+    // モンスター設置
+    const monsters = [
+      {
+        id: 1,
+        name: "スライム",
+        col: 7,
+        row: 4
+      },
+      {
+        id: 1,
+        name: "スライム",
+        col: 7,
+        row: 10
+      },
+
+    ];
+
+    // スライム画像読み込み
+    const slimeImg = new Image();
+    slimeImg.src = "/slime.png";
 
     const inBounds = (c: number, r: number) => c >= 0 && c < cols && r >= 0 && r < rows;
     const isBlocked = (c: number, r: number) => blocked.some(b => b.col === c && b.row === r);
@@ -165,8 +201,8 @@ export default function GameCanvasIso() {
 
     // 初期位置をマップ中央に（例）
     const startCenter = isoToScreen(Math.floor(cols / 2), Math.floor(rows / 2));
-    state.current.x = startCenter.x;
-    state.current.y = startCenter.y + 6;
+    state.current.x = startCenter.x - 3;
+    state.current.y = startCenter.y + 8;
 
     // --- 描画ヘルパー（既存のものをそのまま） ---
     const drawTile = (ctx: CanvasRenderingContext2D, col: number, row: number, fill: string) => {
@@ -261,8 +297,31 @@ export default function GameCanvasIso() {
             path = [];
             state.current.moving = false;
           } else {
+            const monsterIndex =
+              pathFound.findIndex(node =>
+                monsters.some(
+                  m =>
+                    m.col === node.col &&
+                    m.row === node.row
+                )
+              );
+            if (monsterIndex >= 0) {
+              const monster =
+                monsters.find(
+                  m =>
+                    m.col === pathFound[monsterIndex].col &&
+                    m.row === pathFound[monsterIndex].row
+                );
+              battleMonsterId = monster?.id ?? null;
+              pathFound.splice(monsterIndex);
+            }
+
             path = pathFound.slice();
-            const next = path.shift()!;
+            const next = path.shift();
+            if (!next) {
+              state.current.moving = false;
+              return;
+            }
             const center = isoToScreen(next.col, next.row);
             state.current.targetX = center.x;
             state.current.targetY = center.y + 6;
@@ -291,8 +350,31 @@ export default function GameCanvasIso() {
             path = [];
             state.current.moving = false;
           } else {
+            const monsterIndex =
+              pathFound.findIndex(node =>
+                monsters.some(
+                  m =>
+                    m.col === node.col &&
+                    m.row === node.row
+                )
+              );
+            if (monsterIndex >= 0) {
+              const monster =
+                monsters.find(
+                  m =>
+                    m.col === pathFound[monsterIndex].col &&
+                    m.row === pathFound[monsterIndex].row
+                );
+              battleMonsterId = monster?.id ?? null;
+              pathFound.splice(monsterIndex);
+            }
+
             path = pathFound.slice();
-            const next = path.shift()!;
+            const next = path.shift();
+            if (!next) {
+              state.current.moving = false;
+              return;
+            }
             const center = isoToScreen(next.col, next.row);
             state.current.targetX = center.x;
             state.current.targetY = center.y + 6;
@@ -403,12 +485,19 @@ export default function GameCanvasIso() {
           state.current.y = state.current.targetY;
           if (path.length > 0) {
             const next = path.shift()!;
+            if (!next) {
+              state.current.moving = false;
+              return;
+            }
             const center = isoToScreen(next.col, next.row);
             state.current.targetX = center.x;
             state.current.targetY = center.y + 6;
             state.current.moving = true;
           } else {
             state.current.moving = false;
+            if (battleMonsterId) {
+              battleTransition = true;
+            }
             active.col = -1; active.row = -1;
             longActive.col = -1; longActive.row = -1;
           }
@@ -490,7 +579,21 @@ export default function GameCanvasIso() {
         ctx.restore();
       }
 
+      // 岩描画
       for (const b of blocked) drawRock(ctx, b.col, b.row);
+      
+      // モンスター描画
+      for (const m of monsters) {
+        const p = isoToScreen(m.col, m.row);
+
+        ctx.drawImage(
+          slimeImg,
+          p.x - 30,
+          p.y - 30,
+          60,
+          48
+        );
+      }
 
       if (flashCell && flashCell.until > performance.now()) {
         const p = isoToScreen(flashCell.col, flashCell.row);
@@ -514,6 +617,31 @@ export default function GameCanvasIso() {
 
       // キャラ描画
       drawCharacter();
+
+      if (battleTransition) {
+
+      transitionProgress += 0.02;
+
+      ctx.fillStyle =
+        `rgba(0,0,0,${transitionProgress})`;
+
+      ctx.fillRect(
+        -currentCssW / 2,
+        -currentCssH / 2,
+        currentCssW,
+        currentCssH
+      );
+
+      console.log(transitionProgress);
+      if (transitionProgress >= 1 && !isTransitioning) {
+        isTransitioning = true;
+        setTimeout(() => {
+          router.push(
+            `/battle?monsterId=${battleMonsterId}`
+          );
+        }, 500);
+      }
+    }
 
       raf = requestAnimationFrame(loop);
     }
