@@ -224,7 +224,7 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
       <div className="lr-bg-trees" aria-hidden />
 
       <div className="lr-field">
-        {/* 敵（左上寄り） */}
+        {/* 敵（左・草原の上） */}
         <div className={`lr-actor enemy ${shakeEnemy ? "shake" : ""}`}>
           <img
             src={monster.image}
@@ -232,18 +232,21 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
             draggable={false}
             className="lr-enemy-img"
           />
-          <div className="lr-hp-wrap">
-            <div className="lr-hp">
-              <div
-                className="fill enemy"
-                style={{ width: `${(enemyHp / monster.maxHp) * 100}%` }}
-              />
+          <div className="lr-enemy-meta">
+            <span className="lr-name enemy">{monster.name}</span>
+            <div className="lr-hp-wrap">
+              <div className="lr-hp">
+                <div
+                  className="fill enemy"
+                  style={{ width: `${(enemyHp / monster.maxHp) * 100}%` }}
+                />
+              </div>
             </div>
-          </div>
-          <div className="lr-gauge-wrap" title="敵の行動ゲージ">
-            <span className="lr-gauge-label">行動</span>
-            <div className="lr-gauge enemy">
-              <div className="fill" style={{ width: `${enemyGauge * 100}%` }} />
+            <div className="lr-gauge-wrap" title="敵の行動ゲージ">
+              <span className="lr-gauge-label">行動</span>
+              <div className="lr-gauge enemy">
+                <div className="fill" style={{ width: `${enemyGauge * 100}%` }} />
+              </div>
             </div>
           </div>
           {damagePopup?.side === "enemy" && (
