@@ -54,7 +54,7 @@ export default function GameCanvasIso() {
     }
 
     resize();
-    window.addEventListener("resize", resize);
+    // resize 時のカメラ再クランプは clampCamera 定義後に登録
 
     // --- プレイ設定（既存値をそのまま） ---
     const playArea = { x: 170, y: 60, w: 1300, h: 1300 }; // xyは始点マスの位置、whは全体のデカさ
@@ -109,6 +109,49 @@ export default function GameCanvasIso() {
       if (!inBounds(col, row)) return { col: -1, row: -1 };
       return { col, row };
     };
+
+    // --- カメラ（スワイプでマップを見る） ---
+    let camX = 0;
+    let camY = 0;
+    const viewToWorld = (vx: number, vy: number) => ({ x: vx - camX, y: vy - camY });
+
+    const mapBounds = () => {
+      const pts = [
+        isoToScreen(0, 0),
+        isoToScreen(cols - 1, 0),
+        isoToScreen(0, rows - 1),
+        isoToScreen(cols - 1, rows - 1),
+      ];
+      const xs = pts.map((p) => p.x);
+      const ys = pts.map((p) => p.y);
+      return {
+        minX: Math.min(...xs) - tileW,
+        maxX: Math.max(...xs) + tileW,
+        minY: Math.min(...ys) - tileH,
+        maxY: Math.max(...ys) + tileH * 2,
+      };
+    };
+
+    const clampCamera = () => {
+      const b = mapBounds();
+      const halfW = currentCssW / 2;
+      const halfH = currentCssH / 2;
+      const pad = 28;
+      const minCamX = halfW - pad - b.maxX;
+      const maxCamX = -halfW + pad - b.minX;
+      const minCamY = halfH - pad - b.maxY;
+      const maxCamY = -halfH + pad - b.minY;
+      if (minCamX > maxCamX) camX = -((b.minX + b.maxX) / 2);
+      else camX = Math.max(minCamX, Math.min(maxCamX, camX));
+      if (minCamY > maxCamY) camY = -((b.minY + b.maxY) / 2);
+      else camY = Math.max(minCamY, Math.min(maxCamY, camY));
+    };
+
+    const onWindowResize = () => {
+      resize();
+      clampCamera();
+    };
+    window.addEventListener("resize", onWindowResize);
 
     // --- 画面端クランプ（既存ロジックをそのまま） ---
     const screenCorners = (() => {
@@ -201,6 +244,10 @@ export default function GameCanvasIso() {
     const startCenter = isoToScreen(Math.floor(cols / 2), Math.floor(rows / 2));
     state.current.x = startCenter.x - 3;
     state.current.y = startCenter.y + 8;
+    // 最初はキャラが画面中央付近に来るようカメラ合わせ
+    camX = -state.current.x;
+    camY = -state.current.y;
+    clampCamera();
 
     // --- 描画ヘルパー（既存のものをそのまま） ---
     const drawTile = (ctx: CanvasRenderingContext2D, col: number, row: number, fill: string) => {
@@ -284,129 +331,160 @@ export default function GameCanvasIso() {
       return { x: localX, y: localY };
     }
 
-    // --- pointer イベントハンドラ（中心原点対応） ---
+    // --- pointer イベントハンドラ（タップ=移動 / スワイプ=カメラ） ---
     let longPressTimer: number | null = null;
     let longPressActive = false;
     const LONG_PRESS_MS = 400;
+    const PAN_THRESHOLD = 12;
+    let pointerDown = false;
+    let panMode = false;
+    let movedEnough = false;
+    let downClientX = 0;
+    let downClientY = 0;
+    let downCamX = 0;
+    let downCamY = 0;
+    let pendingTap: { col: number; row: number } | null = null;
+
+    function issueMoveTo(cell: { col: number; row: number }, asLong = false) {
+      if (cell.col < 0) return;
+      if (isBlocked(cell.col, cell.row)) {
+        flashCell = { col: cell.col, row: cell.row, until: performance.now() + 300 };
+        return;
+      }
+      const curCell = screenToIso(state.current.x, state.current.y);
+      const pathFound = findPath(curCell, { col: cell.col, row: cell.row });
+      if (!pathFound) {
+        flashCell = { col: cell.col, row: cell.row, until: performance.now() + 300 };
+        path = [];
+        state.current.moving = false;
+        return;
+      }
+
+      const monsterIndex = pathFound.findIndex((node) =>
+        monsters.some((m) => m.col === node.col && m.row === node.row)
+      );
+      if (monsterIndex >= 0) {
+        const monster = monsters.find(
+          (m) =>
+            m.col === pathFound[monsterIndex].col &&
+            m.row === pathFound[monsterIndex].row
+        );
+        battleMonsterId = monster?.id ?? null;
+        battleInstanceId = monster?.instanceId ?? null;
+        pathFound.splice(monsterIndex);
+      }
+
+      path = pathFound.slice();
+      const next = path.shift();
+      if (!next) {
+        state.current.moving = false;
+        if (battleMonsterId) battleTransition = true;
+        return;
+      }
+      const center = isoToScreen(next.col, next.row);
+      state.current.targetX = center.x;
+      state.current.targetY = center.y + 6;
+      state.current.moving = true;
+      if (asLong) {
+        longActive.col = cell.col;
+        longActive.row = cell.row;
+        active.col = -1;
+        active.row = -1;
+      } else {
+        active.col = cell.col;
+        active.row = cell.row;
+        longActive.col = -1;
+        longActive.row = -1;
+      }
+    }
 
     const onPointerDown = (ev: PointerEvent) => {
+      ev.preventDefault();
       (ev.target as Element).setPointerCapture?.(ev.pointerId);
-      const p = toCanvasPos(ev.clientX, ev.clientY);
-      const cell = screenToIso(p.x, p.y);
-      hover.col = cell.col; hover.row = cell.row;
-      if (cell.col >= 0) {
-        if (isBlocked(cell.col, cell.row)) {
-          flashCell = { col: cell.col, row: cell.row, until: performance.now() + 300 };
-        } else {
-          const curCell = screenToIso(state.current.x, state.current.y);
-          const pathFound = findPath(curCell, { col: cell.col, row: cell.row });
-          if (!pathFound) {
-            flashCell = { col: cell.col, row: cell.row, until: performance.now() + 300 };
-            path = [];
-            state.current.moving = false;
-          } else {
-            const monsterIndex =
-              pathFound.findIndex(node =>
-                monsters.some(
-                  m =>
-                    m.col === node.col &&
-                    m.row === node.row
-                )
-              );
-            if (monsterIndex >= 0) {
-              const monster =
-                monsters.find(
-                  m =>
-                    m.col === pathFound[monsterIndex].col &&
-                    m.row === pathFound[monsterIndex].row
-                );
-              battleMonsterId = monster?.id ?? null;
-              battleInstanceId = monster?.instanceId ?? null;
-              pathFound.splice(monsterIndex);
-            }
+      pointerDown = true;
+      panMode = false;
+      movedEnough = false;
+      downClientX = ev.clientX;
+      downClientY = ev.clientY;
+      downCamX = camX;
+      downCamY = camY;
 
-            path = pathFound.slice();
-            const next = path.shift();
-            if (!next) {
-              // 隣のモンスターをクリックした場合など、移動マスがなくても戦闘へ
-              state.current.moving = false;
-              if (battleMonsterId) battleTransition = true;
-            } else {
-              const center = isoToScreen(next.col, next.row);
-              state.current.targetX = center.x;
-              state.current.targetY = center.y + 6;
-              state.current.moving = true;
-              active.col = cell.col; active.row = cell.row;
-              longActive.col = -1; longActive.row = -1;
-            }
-          }
-        }
-      }
+      const p = toCanvasPos(ev.clientX, ev.clientY);
+      const w = viewToWorld(p.x, p.y);
+      const cell = screenToIso(w.x, w.y);
+      hover.col = cell.col;
+      hover.row = cell.row;
+      pendingTap = cell.col >= 0 ? { col: cell.col, row: cell.row } : null;
+
       state.current.dragging = true;
-      longPressTimer = window.setTimeout(() => { longPressActive = true; }, LONG_PRESS_MS);
+      longPressTimer = window.setTimeout(() => {
+        if (!movedEnough && pendingTap) {
+          longPressActive = true;
+          issueMoveTo(pendingTap, true);
+        }
+      }, LONG_PRESS_MS);
     };
 
     const onPointerMove = (ev: PointerEvent) => {
       const p = toCanvasPos(ev.clientX, ev.clientY);
-      const cell = screenToIso(p.x, p.y);
-      hover.col = cell.col; hover.row = cell.row;
-      if (state.current.dragging && longPressActive && cell.col >= 0) {
-        if (isBlocked(cell.col, cell.row)) {
-          flashCell = { col: cell.col, row: cell.row, until: performance.now() + 300 };
-        } else {
-          const curCell = screenToIso(state.current.x, state.current.y);
-          const pathFound = findPath(curCell, { col: cell.col, row: cell.row });
-          if (!pathFound) {
-            flashCell = { col: cell.col, row: cell.row, until: performance.now() + 300 };
-            path = [];
-            state.current.moving = false;
-          } else {
-            const monsterIndex =
-              pathFound.findIndex(node =>
-                monsters.some(
-                  m =>
-                    m.col === node.col &&
-                    m.row === node.row
-                )
-              );
-            if (monsterIndex >= 0) {
-              const monster =
-                monsters.find(
-                  m =>
-                    m.col === pathFound[monsterIndex].col &&
-                    m.row === pathFound[monsterIndex].row
-                );
-              battleMonsterId = monster?.id ?? null;
-              battleInstanceId = monster?.instanceId ?? null;
-              pathFound.splice(monsterIndex);
-            }
+      const w = viewToWorld(p.x, p.y);
+      const cell = screenToIso(w.x, w.y);
+      hover.col = cell.col;
+      hover.row = cell.row;
 
-            path = pathFound.slice();
-            const next = path.shift();
-            if (!next) {
-              state.current.moving = false;
-              if (battleMonsterId) battleTransition = true;
-            } else {
-              const center = isoToScreen(next.col, next.row);
-              state.current.targetX = center.x;
-              state.current.targetY = center.y + 6;
-              state.current.moving = true;
-              longActive.col = cell.col; longActive.row = cell.row;
-              active.col = -1; active.row = -1;
-            }
-          }
+      if (!pointerDown) return;
+
+      const dx = ev.clientX - downClientX;
+      const dy = ev.clientY - downClientY;
+      if (!movedEnough && Math.hypot(dx, dy) > PAN_THRESHOLD) {
+        movedEnough = true;
+        panMode = true;
+        longPressActive = false;
+        pendingTap = null;
+        active.col = -1;
+        active.row = -1;
+        longActive.col = -1;
+        longActive.row = -1;
+        if (longPressTimer) {
+          clearTimeout(longPressTimer);
+          longPressTimer = null;
         }
+      }
+
+      if (panMode) {
+        camX = downCamX + dx;
+        camY = downCamY + dy;
+        clampCamera();
+        return;
+      }
+
+      if (longPressActive && cell.col >= 0) {
+        issueMoveTo(cell, true);
       }
     };
 
     const onPointerUp = (ev: PointerEvent) => {
-      try { (ev.target as Element).releasePointerCapture?.(ev.pointerId); } catch {}
+      try {
+        (ev.target as Element).releasePointerCapture?.(ev.pointerId);
+      } catch {}
+      if (!panMode && !longPressActive && pendingTap) {
+        issueMoveTo(pendingTap, false);
+      }
+      pointerDown = false;
+      panMode = false;
+      movedEnough = false;
+      pendingTap = null;
       state.current.dragging = false;
-      if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+      if (longPressTimer) {
+        clearTimeout(longPressTimer);
+        longPressTimer = null;
+      }
       longPressActive = false;
-      longActive.col = -1; longActive.row = -1;
+      longActive.col = -1;
+      longActive.row = -1;
     };
 
+    canvas.style.touchAction = "none";
     canvas.addEventListener("pointerdown", onPointerDown);
     window.addEventListener("pointermove", onPointerMove);
     window.addEventListener("pointerup", onPointerUp);
@@ -427,19 +505,9 @@ export default function GameCanvasIso() {
       const anchorX = drawW / 2;
       const anchorY = drawH * 0.86; // 調整値: 0.9〜1.0 を試す
 
-      // 描画座標（中心原点の state.current をそのまま使う）
-      let dx = Math.round(state.current.x - anchorX);
-      let dy = Math.round(state.current.y - anchorY);
-
-      // 画面外に出ないように簡易クランプ（currentCssW/currentCssH がある前提）
-      // currentCssW/currentCssH は resize() で更新されている想定
-      const halfW = (typeof currentCssW === 'number') ? currentCssW / 2 : 600;
-      const halfH = (typeof currentCssH === 'number') ? currentCssH / 2 : 400;
-      dx = Math.max(Math.round(-halfW), Math.min(Math.round(halfW - drawW), dx));
-      dy = Math.max(Math.round(-halfH), Math.min(Math.round(halfH - drawH), dy));
-
-      // ログ（デバッグ時のみ）
-      // console.log({ drawW, drawH, anchorY, dx, dy, imgComplete: charImg.complete, naturalW: charImg.naturalWidth });
+      // 描画座標（ワールド座標。カメラ translate 内で描く）
+      const dx = Math.round(state.current.x - anchorX);
+      const dy = Math.round(state.current.y - anchorY);
 
       if (charImg.complete && charImg.naturalWidth > 0) {
         ctx.drawImage(charImg, dx, dy, drawW, drawH);
@@ -582,10 +650,14 @@ export default function GameCanvasIso() {
         monsters = getAliveFieldMonsters();
       }
 
-      // clear（注意: ctx は既に translate されているので中心基準）
+      // clear（画面固定の背景）
       ctx.clearRect(-currentCssW / 2, -currentCssH / 2, currentCssW, currentCssH);
       ctx.fillStyle = "#111";
       ctx.fillRect(-currentCssW / 2, -currentCssH / 2, currentCssW, currentCssH);
+
+      // ワールド（カメラオフセット）
+      ctx.save();
+      ctx.translate(camX, camY);
 
       // draw tiles
       for (let r = 0; r < rows; r++) {
@@ -687,6 +759,8 @@ export default function GameCanvasIso() {
       // キャラ描画
       drawCharacter();
 
+      ctx.restore();
+
       if (battleTransition) {
 
       transitionProgress += 0.02;
@@ -750,7 +824,7 @@ export default function GameCanvasIso() {
     // クリーンアップ
     return () => {
       if (raf) cancelAnimationFrame(raf);
-      window.removeEventListener("resize", resize);
+      window.removeEventListener("resize", onWindowResize);
       canvas.removeEventListener("pointerdown", onPointerDown);
       window.removeEventListener("pointermove", onPointerMove);
       window.removeEventListener("pointerup", onPointerUp);

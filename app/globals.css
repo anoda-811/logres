@@ -38,6 +38,7 @@ body {
 .canvas-wrapper canvas {
   pointer-events: auto;
   image-rendering: pixelated;
+  touch-action: none;
 }
 
 /* ===== Chat panel (map + battle) ===== */
