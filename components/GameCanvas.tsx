@@ -3,14 +3,20 @@ import React, { useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { getAliveFieldMonsters, type FieldMonster } from "../lib/monsters";
 import { getSpeechBubble } from "../lib/chatStore";
+import type { AreaId } from "../lib/locations";
 
-export default function GameCanvasIso() {
+type Props = {
+  areaId?: AreaId;
+};
+
+export default function GameCanvasIso({ areaId = "field" }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const router = useRouter();
+  const isTown = areaId === "town";
 
   // 本体
   useEffect(() => {
-    console.log("effect start");
+    console.log("effect start", areaId);
     const canvas = canvasRef.current!;
     const ctx = canvas.getContext("2d")!;
     let raf = 0;
@@ -78,7 +84,7 @@ export default function GameCanvasIso() {
     // 旧フォーマット掃除
     sessionStorage.removeItem("defeatedMonster");
     sessionStorage.removeItem("defeatedMonsters");
-    let monsters: FieldMonster[] = getAliveFieldMonsters();
+    let monsters: FieldMonster[] = isTown ? [] : getAliveFieldMonsters();
     let lastRespawnCheck = 0;
 
     // スライム画像読み込み
@@ -647,12 +653,12 @@ export default function GameCanvasIso() {
       // 倒した敵の復活チェック（0.5秒ごと）
       if (ts - lastRespawnCheck > 500) {
         lastRespawnCheck = ts;
-        monsters = getAliveFieldMonsters();
+        monsters = isTown ? [] : getAliveFieldMonsters();
       }
 
       // clear（画面固定の背景）
       ctx.clearRect(-currentCssW / 2, -currentCssH / 2, currentCssW, currentCssH);
-      ctx.fillStyle = "#111";
+      ctx.fillStyle = isTown ? "#2a2430" : "#111";
       ctx.fillRect(-currentCssW / 2, -currentCssH / 2, currentCssW, currentCssH);
 
       // ワールド（カメラオフセット）
@@ -662,7 +668,13 @@ export default function GameCanvasIso() {
       // draw tiles
       for (let r = 0; r < rows; r++) {
         for (let c = 0; c < cols; c++) {
-          const base = (c + r) % 2 === 0 ? "#6fbf6f" : "#5fb05f";
+          const base = isTown
+            ? (c + r) % 2 === 0
+              ? "#c4b49a"
+              : "#b39b7a"
+            : (c + r) % 2 === 0
+              ? "#6fbf6f"
+              : "#5fb05f";
           drawTile(ctx, c, r, base);
         }
       }
@@ -829,7 +841,7 @@ export default function GameCanvasIso() {
       window.removeEventListener("pointermove", onPointerMove);
       window.removeEventListener("pointerup", onPointerUp);
     };
-  }, []);
+  }, [areaId, isTown, router]);
 
 
   return (

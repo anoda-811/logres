@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import ChatPanel from "./ChatPanel";
 import { getMonster, markMonsterDefeated } from "../lib/monsters";
+import { getActiveCharacter } from "../lib/characters";
 import {
   getServerSpeechBubble,
   getSpeechBubble,
@@ -85,6 +86,9 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
   const router = useRouter();
   const monster = getMonster(monsterId);
   const bubble = useBubble();
+  const [playerName] = useState(
+    () => getActiveCharacter()?.name ?? "ゆうしゃ"
+  );
 
   const [enemyHp, setEnemyHp] = useState(monster.maxHp);
   const [playerHp, setPlayerHp] = useState(40);
@@ -323,7 +327,7 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
             <img src="/chara.png" alt="プレイヤー" draggable={false} />
           </button>
           <div className="lr-player-meta">
-            <span className="lr-name">ゆうしゃ</span>
+            <span className="lr-name">{playerName}</span>
             <div className="lr-hp">
               <div
                 className="fill"
