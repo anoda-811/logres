@@ -5,6 +5,8 @@ import ChatPanel from "../components/ChatPanel";
 import FieldHUD from "../components/FieldHUD";
 import FieldBgm from "../components/FieldBgm";
 import WorldMapModal from "../components/WorldMapModal";
+import QuestBoardModal from "../components/QuestBoardModal";
+import WeaponShopModal from "../components/WeaponShopModal";
 import WorldSelectScreen, {
   type WorldInfo,
 } from "../components/WorldSelectScreen";
@@ -26,6 +28,8 @@ export default function Page() {
   const [character, setCharacter] = useState<PlayerCharacter | null>(null);
   const [areaId, setAreaId] = useState<AreaId>("field");
   const [mapOpen, setMapOpen] = useState(false);
+  const [questBoardOpen, setQuestBoardOpen] = useState(false);
+  const [weaponShopOpen, setWeaponShopOpen] = useState(false);
   const [bgmEnabled, setBgmEnabled] = useState(true);
 
   const area = getArea(areaId);
@@ -48,11 +52,12 @@ export default function Page() {
   }, []);
 
   const returnToTitle = () => {
-    // 場所は localStorage に残して、次回スタートで復帰
     setStarted(false);
     setWorld(null);
     setCharacter(null);
     setMapOpen(false);
+    setQuestBoardOpen(false);
+    setWeaponShopOpen(false);
   };
 
   const travelTo = (id: AreaId) => {
@@ -85,7 +90,12 @@ export default function Page() {
       />
       {started ? (
         <>
-          <GameCanvas key={areaId} areaId={areaId} />
+          <GameCanvas
+            key={areaId}
+            areaId={areaId}
+            onOpenQuestBoard={() => setQuestBoardOpen(true)}
+            onOpenWeaponShop={() => setWeaponShopOpen(true)}
+          />
           <FieldHUD
             onReturnTitle={returnToTitle}
             onOpenWorldMap={() => setMapOpen(true)}
@@ -100,6 +110,14 @@ export default function Page() {
             currentAreaId={areaId}
             onClose={() => setMapOpen(false)}
             onTravel={travelTo}
+          />
+          <QuestBoardModal
+            open={questBoardOpen}
+            onClose={() => setQuestBoardOpen(false)}
+          />
+          <WeaponShopModal
+            open={weaponShopOpen}
+            onClose={() => setWeaponShopOpen(false)}
           />
         </>
       ) : (

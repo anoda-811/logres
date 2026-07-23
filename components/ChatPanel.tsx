@@ -40,7 +40,21 @@ export default function ChatPanel({ className = "" }: Props) {
   };
 
   return (
-    <div className={`chat-panel ${className}`}>
+    <div
+      className={`chat-panel ${className}`}
+      style={
+        className.includes("field-chat")
+          ? {
+              position: "fixed",
+              left: 40,
+              bottom: 16,
+              width: "min(380px, calc(100vw - 56px))",
+              height: 168,
+              zIndex: 10060,
+            }
+          : undefined
+      }
+    >
       <div className="chat-panel-head">チャット / バトル情報</div>
       <div className="chat-panel-log" ref={listRef}>
         {messages.length === 0 && (

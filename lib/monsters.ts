@@ -9,7 +9,7 @@ export type MonsterDef = {
 export const MONSTERS: Record<number, MonsterDef> = {
   1: {
     id: 1,
-    name: "スライム",
+    name: "レッドスライム",
     maxHp: 30,
     atk: 4,
     image: "/slime.png",
@@ -25,8 +25,8 @@ export type FieldMonster = {
 };
 
 export const DEFAULT_FIELD_MONSTERS: FieldMonster[] = [
-  { instanceId: "slime-7-4", id: 1, name: "スライム", col: 7, row: 4 },
-  { instanceId: "slime-7-10", id: 1, name: "スライム", col: 7, row: 10 },
+  { instanceId: "slime-7-4", id: 1, name: "レッドスライム", col: 7, row: 4 },
+  { instanceId: "slime-7-10", id: 1, name: "レッドスライム", col: 7, row: 10 },
 ];
 
 /** 倒してから復活するまでの時間（ミリ秒） */

@@ -5,6 +5,8 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import ChatPanel from "./ChatPanel";
 import { getMonster, markMonsterDefeated } from "../lib/monsters";
 import { getActiveCharacter } from "../lib/characters";
+import { recordMonsterKill } from "../lib/quests";
+import { getEquippedWeapon } from "../lib/weapons";
 import {
   getServerSpeechBubble,
   getSpeechBubble,
@@ -124,12 +126,11 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
   useEffect(() => {
     if (!result) return;
     const t = setTimeout(() => {
-      if (result === "win" && instanceId) markMonsterDefeated(instanceId);
       sessionStorage.setItem("resumeField", "1");
       router.push("/");
     }, result === "flee" ? 700 : 1200);
     return () => clearTimeout(t);
-  }, [result, instanceId, router]);
+  }, [result, router]);
 
   const flashDamage = (side: "enemy" | "player", value: number) => {
     setDamagePopup({ side, value });
@@ -206,7 +207,10 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
     setMenuOpen(false);
     setPlayerSp((s) => Math.max(0, s - cmd.cost));
 
-    const dmg = cmd.power + Math.floor(Math.random() * 4);
+    const dmg =
+      cmd.power +
+      getEquippedWeapon().atkBonus +
+      Math.floor(Math.random() * 4);
     const nextEnemyHp = Math.max(0, enemyHpRef.current - dmg);
     flashDamage("enemy", dmg);
     pushBattleLog(`${cmd.label}！ ${monster.name} に ${dmg} ダメージ`);
@@ -214,6 +218,11 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
 
     if (nextEnemyHp <= 0) {
       pushBattleLog(`${monster.name} をたおした！`);
+      if (instanceId) markMonsterDefeated(instanceId);
+      const done = recordMonsterKill(monster.id);
+      for (const title of done) {
+        pushBattleLog(`クエスト「${title}」を達成！報酬を手に入れた`);
+      }
       setTimeout(() => setResult("win"), 450);
       return;
     }

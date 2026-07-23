@@ -1,18 +1,33 @@
 "use client";
-import React, { useRef, useEffect } from "react";
+import React, { useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { getAliveFieldMonsters, type FieldMonster } from "../lib/monsters";
-import { getSpeechBubble } from "../lib/chatStore";
+import { getSpeechBubble, pushChatMessage } from "../lib/chatStore";
 import type { AreaId } from "../lib/locations";
 
 type Props = {
   areaId?: AreaId;
+  onOpenQuestBoard?: () => void;
+  onOpenWeaponShop?: () => void;
 };
 
-export default function GameCanvasIso({ areaId = "field" }: Props) {
+/** 城下町のクエストボードマス（スポーン付近） */
+const QUEST_BOARD = { col: 7, row: 6 };
+/** 城下町の武器屋（鍛冶屋）マス */
+const WEAPON_SMITH = { col: 4, row: 9 };
+
+export default function GameCanvasIso({
+  areaId = "field",
+  onOpenQuestBoard,
+  onOpenWeaponShop,
+}: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const router = useRouter();
   const isTown = areaId === "town";
+  const questBoardRef = useRef(onOpenQuestBoard);
+  questBoardRef.current = onOpenQuestBoard;
+  const weaponShopRef = useRef(onOpenWeaponShop);
+  weaponShopRef.current = onOpenWeaponShop;
 
   // 本体
   useEffect(() => {
@@ -71,7 +86,7 @@ export default function GameCanvasIso({ areaId = "field" }: Props) {
     const radius = Math.max(12, Math.floor(tileW * 0.18));
 
     // 岩設置
-    const blocked: { col: number; row: number }[] = [
+    const rockBlocked: { col: number; row: number }[] = [
       { col: 0, row: 0 }, 
       { col: 2, row: 5 },
       { col: 3, row: 2 }, 
@@ -79,6 +94,9 @@ export default function GameCanvasIso({ areaId = "field" }: Props) {
       { col: 5, row: 2 }, 
       { col: 6, row: 2 }, { col: 6, row: 3 }, { col: 6, row: 4 }
     ];
+    const blocked: { col: number; row: number }[] = isTown
+      ? [...rockBlocked, { col: WEAPON_SMITH.col, row: WEAPON_SMITH.row }]
+      : rockBlocked;
 
     // モンスター設置（倒した敵は一定時間後に復活）
     // 旧フォーマット掃除
@@ -90,6 +108,8 @@ export default function GameCanvasIso({ areaId = "field" }: Props) {
     // スライム画像読み込み
     const slimeImg = new Image();
     slimeImg.src = "/slime.png";
+    const smithImg = new Image();
+    smithImg.src = "/blacksmith.png";
 
     const inBounds = (c: number, r: number) => c >= 0 && c < cols && r >= 0 && r < rows;
     const isBlocked = (c: number, r: number) => blocked.some(b => b.col === c && b.row === r);
@@ -292,6 +312,172 @@ export default function GameCanvasIso({ areaId = "field" }: Props) {
       ctx.fill();
       ctx.restore();
     };
+
+    const drawQuestBoard = (
+      ctx: CanvasRenderingContext2D,
+      col: number,
+      row: number,
+      highlight: null | "ok" | "far" = null
+    ) => {
+      const p = isoToScreen(col, row);
+      const cx = p.x;
+      const cy = p.y;
+      const bw = tileW * 0.72;
+      const bh = tileH * 1.55;
+      const top = cy - bh * 0.95;
+      const left = cx - bw / 2;
+      const boardH = bh * 0.72;
+      const rr = 6;
+
+      const boardPath = () => {
+        ctx.beginPath();
+        ctx.moveTo(left + rr, top);
+        ctx.lineTo(left + bw - rr, top);
+        ctx.quadraticCurveTo(left + bw, top, left + bw, top + rr);
+        ctx.lineTo(left + bw, top + boardH - rr);
+        ctx.quadraticCurveTo(
+          left + bw,
+          top + boardH,
+          left + bw - rr,
+          top + boardH
+        );
+        ctx.lineTo(left + rr, top + boardH);
+        ctx.quadraticCurveTo(left, top + boardH, left, top + boardH - rr);
+        ctx.lineTo(left, top + rr);
+        ctx.quadraticCurveTo(left, top, left + rr, top);
+        ctx.closePath();
+      };
+
+      ctx.save();
+      // 影
+      ctx.fillStyle = "rgba(0,0,0,0.28)";
+      ctx.beginPath();
+      ctx.ellipse(cx, cy + 6, bw * 0.45, tileH * 0.22, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // 支柱
+      ctx.fillStyle = "#5a3d22";
+      ctx.fillRect(cx - 5, cy - bh * 0.15, 10, bh * 0.55);
+      // 看板本体
+      ctx.fillStyle = "#8b5a2b";
+      ctx.strokeStyle = "#3e2410";
+      ctx.lineWidth = 2;
+      boardPath();
+      ctx.fill();
+      ctx.stroke();
+      // 紙面
+      ctx.fillStyle = "#f0e0b8";
+      ctx.fillRect(cx - bw * 0.38, top + bh * 0.1, bw * 0.76, bh * 0.48);
+      ctx.fillStyle = "#5a3a18";
+      ctx.font = `bold ${Math.max(10, Math.floor(tileW * 0.12))}px sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("クエスト", cx, top + bh * 0.34);
+
+      // ホバー枠（近い=緑 / 遠い=赤）
+      if (highlight) {
+        const glow =
+          highlight === "ok"
+            ? "rgba(90, 220, 120, 0.85)"
+            : "rgba(255, 80, 80, 0.85)";
+        const soft =
+          highlight === "ok"
+            ? "rgba(90, 220, 120, 0.22)"
+            : "rgba(255, 80, 80, 0.22)";
+        boardPath();
+        ctx.fillStyle = soft;
+        ctx.fill();
+        boardPath();
+        ctx.strokeStyle = glow;
+        ctx.lineWidth = 3;
+        ctx.stroke();
+        // 外側のうっすら光
+        boardPath();
+        ctx.strokeStyle =
+          highlight === "ok"
+            ? "rgba(140, 255, 170, 0.35)"
+            : "rgba(255, 160, 160, 0.35)";
+        ctx.lineWidth = 7;
+        ctx.stroke();
+      }
+      ctx.restore();
+    };
+
+    const drawWeaponSmith = (
+      ctx: CanvasRenderingContext2D,
+      col: number,
+      row: number,
+      highlight: null | "ok" | "far" = null
+    ) => {
+      const p = isoToScreen(col, row);
+      const drawH = Math.round(tileH * 2.35);
+      const drawW = Math.round(drawH * 0.85);
+      const dx = Math.round(p.x - drawW / 2);
+      const dy = Math.round(p.y - drawH * 0.92);
+
+      ctx.save();
+      // 影
+      ctx.fillStyle = "rgba(0,0,0,0.28)";
+      ctx.beginPath();
+      ctx.ellipse(p.x, p.y + 4, drawW * 0.32, tileH * 0.22, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      if (smithImg.complete && smithImg.naturalWidth > 0) {
+        ctx.drawImage(smithImg, dx, dy, drawW, drawH);
+      } else {
+        ctx.fillStyle = "#6a5040";
+        ctx.fillRect(dx + drawW * 0.25, dy + drawH * 0.2, drawW * 0.5, drawH * 0.7);
+      }
+
+      if (highlight) {
+        const glow =
+          highlight === "ok"
+            ? "rgba(90, 220, 120, 0.9)"
+            : "rgba(255, 80, 80, 0.9)";
+        const soft =
+          highlight === "ok"
+            ? "rgba(90, 220, 120, 0.18)"
+            : "rgba(255, 80, 80, 0.18)";
+        const pad = 4;
+        const x = dx - pad;
+        const y = dy - pad;
+        const w = drawW + pad * 2;
+        const h = drawH + pad * 2;
+        ctx.fillStyle = soft;
+        ctx.fillRect(x, y, w, h);
+        ctx.strokeStyle = glow;
+        ctx.lineWidth = 3;
+        ctx.strokeRect(x, y, w, h);
+        ctx.strokeStyle =
+          highlight === "ok"
+            ? "rgba(140, 255, 170, 0.35)"
+            : "rgba(255, 160, 160, 0.35)";
+        ctx.lineWidth = 7;
+        ctx.strokeRect(x, y, w, h);
+      }
+
+      // 名前札
+      ctx.fillStyle = "rgba(0,0,0,0.55)";
+      ctx.fillRect(p.x - 28, p.y + 8, 56, 16);
+      ctx.fillStyle = "#ffe7b0";
+      ctx.font = "bold 11px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("武器屋", p.x, p.y + 16);
+      ctx.restore();
+    };
+
+    const getSmithBounds = () => {
+      const p = isoToScreen(WEAPON_SMITH.col, WEAPON_SMITH.row);
+      const drawH = Math.round(tileH * 2.35);
+      const drawW = Math.round(drawH * 0.85);
+      return {
+        left: p.x - drawW / 2,
+        top: p.y - drawH * 0.92,
+        right: p.x + drawW / 2,
+        bottom: p.y + 8,
+      };
+    };
+
     const drawPathPreview = (ctx: CanvasRenderingContext2D, pth: Node[]) => {
       ctx.save();
       ctx.globalAlpha = 0.18;
@@ -350,6 +536,97 @@ export default function GameCanvasIso({ areaId = "field" }: Props) {
     let downCamX = 0;
     let downCamY = 0;
     let pendingTap: { col: number; row: number } | null = null;
+    /** 看板の木板そのものを押したときだけ true（マス移動とは別） */
+    let pendingBoardTap = false;
+    /** マウスが看板の木板の上にあるか */
+    let hoverBoard = false;
+    /** 武器屋NPCホバー */
+    let hoverSmith = false;
+    let pendingSmithTap = false;
+    /** ボード操作に必要な距離（マス。同じマス〜隣まで） */
+    const QUEST_BOARD_REACH = 1;
+
+    function hitQuestBoardSign(worldX: number, worldY: number): boolean {
+      if (!isTown) return false;
+      const p = isoToScreen(QUEST_BOARD.col, QUEST_BOARD.row);
+      // drawQuestBoard の木板部分だけ（足元マスは含めない）
+      const bw = tileW * 0.72;
+      const bh = tileH * 1.55;
+      const top = p.y - bh * 0.95;
+      const left = p.x - bw / 2;
+      const boardH = bh * 0.72;
+      const pad = 6;
+      return (
+        worldX >= left - pad &&
+        worldX <= left + bw + pad &&
+        worldY >= top - pad &&
+        worldY <= top + boardH + pad
+      );
+    }
+
+    function hitWeaponSmith(worldX: number, worldY: number): boolean {
+      if (!isTown) return false;
+      const b = getSmithBounds();
+      const pad = 4;
+      return (
+        worldX >= b.left - pad &&
+        worldX <= b.right + pad &&
+        worldY >= b.top - pad &&
+        worldY <= b.bottom + pad
+      );
+    }
+
+    function isNearCell(col: number, row: number): boolean {
+      const cur = screenToIso(state.current.x, state.current.y);
+      if (cur.col < 0) return false;
+      const dist = Math.max(
+        Math.abs(cur.col - col),
+        Math.abs(cur.row - row)
+      );
+      return dist <= QUEST_BOARD_REACH;
+    }
+
+    function isNearQuestBoard(): boolean {
+      return isNearCell(QUEST_BOARD.col, QUEST_BOARD.row);
+    }
+
+    function isNearWeaponSmith(): boolean {
+      return isNearCell(WEAPON_SMITH.col, WEAPON_SMITH.row);
+    }
+
+    function openQuestBoardNow() {
+      if (!isNearQuestBoard()) {
+        pushChatMessage("クエストボードにもっと近づいてみよう", "system");
+        flashCell = {
+          col: QUEST_BOARD.col,
+          row: QUEST_BOARD.row,
+          until: performance.now() + 400,
+        };
+        return;
+      }
+      try {
+        questBoardRef.current?.();
+      } catch (e) {
+        console.error("quest board open failed", e);
+      }
+    }
+
+    function openWeaponShopNow() {
+      if (!isNearWeaponSmith()) {
+        pushChatMessage("武器屋にもっと近づいてみよう", "system");
+        flashCell = {
+          col: WEAPON_SMITH.col,
+          row: WEAPON_SMITH.row,
+          until: performance.now() + 400,
+        };
+        return;
+      }
+      try {
+        weaponShopRef.current?.();
+      } catch (e) {
+        console.error("weapon shop open failed", e);
+      }
+    }
 
     function issueMoveTo(cell: { col: number; row: number }, asLong = false) {
       if (cell.col < 0) return;
@@ -357,6 +634,7 @@ export default function GameCanvasIso({ areaId = "field" }: Props) {
         flashCell = { col: cell.col, row: cell.row, until: performance.now() + 300 };
         return;
       }
+
       const curCell = screenToIso(state.current.x, state.current.y);
       const pathFound = findPath(curCell, { col: cell.col, row: cell.row });
       if (!pathFound) {
@@ -366,6 +644,8 @@ export default function GameCanvasIso({ areaId = "field" }: Props) {
         return;
       }
 
+      battleMonsterId = null;
+      battleInstanceId = null;
       const monsterIndex = pathFound.findIndex((node) =>
         monsters.some((m) => m.col === node.col && m.row === node.row)
       );
@@ -420,11 +700,23 @@ export default function GameCanvasIso({ areaId = "field" }: Props) {
       const cell = screenToIso(w.x, w.y);
       hover.col = cell.col;
       hover.row = cell.row;
-      pendingTap = cell.col >= 0 ? { col: cell.col, row: cell.row } : null;
+      pendingBoardTap = hitQuestBoardSign(w.x, w.y);
+      pendingSmithTap = !pendingBoardTap && hitWeaponSmith(w.x, w.y);
+      // 看板／NPC押しのときはマス移動にしない
+      pendingTap =
+        pendingBoardTap || pendingSmithTap || cell.col < 0
+          ? null
+          : { col: cell.col, row: cell.row };
 
       state.current.dragging = true;
       longPressTimer = window.setTimeout(() => {
-        if (!movedEnough && pendingTap) {
+        if (!movedEnough && pendingBoardTap) {
+          longPressActive = true;
+          openQuestBoardNow();
+        } else if (!movedEnough && pendingSmithTap) {
+          longPressActive = true;
+          openWeaponShopNow();
+        } else if (!movedEnough && pendingTap) {
           longPressActive = true;
           issueMoveTo(pendingTap, true);
         }
@@ -437,6 +729,9 @@ export default function GameCanvasIso({ areaId = "field" }: Props) {
       const cell = screenToIso(w.x, w.y);
       hover.col = cell.col;
       hover.row = cell.row;
+      hoverBoard = hitQuestBoardSign(w.x, w.y);
+      hoverSmith = !hoverBoard && hitWeaponSmith(w.x, w.y);
+      canvas.style.cursor = hoverBoard || hoverSmith ? "pointer" : "";
 
       if (!pointerDown) return;
 
@@ -447,6 +742,8 @@ export default function GameCanvasIso({ areaId = "field" }: Props) {
         panMode = true;
         longPressActive = false;
         pendingTap = null;
+        pendingBoardTap = false;
+        pendingSmithTap = false;
         active.col = -1;
         active.row = -1;
         longActive.col = -1;
@@ -464,7 +761,7 @@ export default function GameCanvasIso({ areaId = "field" }: Props) {
         return;
       }
 
-      if (longPressActive && cell.col >= 0) {
+      if (longPressActive && !pendingBoardTap && !pendingSmithTap && cell.col >= 0) {
         issueMoveTo(cell, true);
       }
     };
@@ -473,13 +770,21 @@ export default function GameCanvasIso({ areaId = "field" }: Props) {
       try {
         (ev.target as Element).releasePointerCapture?.(ev.pointerId);
       } catch {}
-      if (!panMode && !longPressActive && pendingTap) {
-        issueMoveTo(pendingTap, false);
+      if (!panMode && !longPressActive) {
+        if (pendingBoardTap) {
+          openQuestBoardNow();
+        } else if (pendingSmithTap) {
+          openWeaponShopNow();
+        } else if (pendingTap) {
+          issueMoveTo(pendingTap, false);
+        }
       }
       pointerDown = false;
       panMode = false;
       movedEnough = false;
       pendingTap = null;
+      pendingBoardTap = false;
+      pendingSmithTap = false;
       state.current.dragging = false;
       if (longPressTimer) {
         clearTimeout(longPressTimer);
@@ -494,6 +799,12 @@ export default function GameCanvasIso({ areaId = "field" }: Props) {
     canvas.addEventListener("pointerdown", onPointerDown);
     window.addEventListener("pointermove", onPointerMove);
     window.addEventListener("pointerup", onPointerUp);
+    const onPointerLeave = () => {
+      hoverBoard = false;
+      hoverSmith = false;
+      canvas.style.cursor = "";
+    };
+    canvas.addEventListener("pointerleave", onPointerLeave);
 
     // キャラクター描画
     function drawCharacter() {
@@ -733,7 +1044,24 @@ export default function GameCanvasIso({ areaId = "field" }: Props) {
       }
 
       // 岩描画
-      for (const b of blocked) drawRock(ctx, b.col, b.row);
+      for (const b of rockBlocked) drawRock(ctx, b.col, b.row);
+
+      // 城下町クエストボード（マスに乗っても開かない／木板クリックのみ）
+      if (isTown) {
+        const hl = hoverBoard
+          ? isNearQuestBoard()
+            ? "ok"
+            : "far"
+          : null;
+        drawQuestBoard(ctx, QUEST_BOARD.col, QUEST_BOARD.row, hl);
+
+        const shl = hoverSmith
+          ? isNearWeaponSmith()
+            ? "ok"
+            : "far"
+          : null;
+        drawWeaponSmith(ctx, WEAPON_SMITH.col, WEAPON_SMITH.row, shl);
+      }
       
       // モンスター描画
       for (const m of monsters) {
@@ -840,6 +1168,7 @@ export default function GameCanvasIso({ areaId = "field" }: Props) {
       canvas.removeEventListener("pointerdown", onPointerDown);
       window.removeEventListener("pointermove", onPointerMove);
       window.removeEventListener("pointerup", onPointerUp);
+      canvas.removeEventListener("pointerleave", onPointerLeave);
     };
   }, [areaId, isTown, router]);
 

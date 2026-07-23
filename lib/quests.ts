@@ -34,13 +34,39 @@ const DEFAULT_MONEY = 164;
 type Listener = () => void;
 const listeners = new Set<Listener>();
 
+export type QuestSnapshot = {
+  money: number;
+  quests: QuestProgress[];
+};
+
+const SERVER_SNAPSHOT: QuestSnapshot = {
+  money: DEFAULT_MONEY,
+  quests: [],
+};
+
+let cachedSnapshot: QuestSnapshot | null = null;
+
+function readSnapshot(): QuestSnapshot {
+  return {
+    money: loadMoney(),
+    quests: loadQuestProgress(),
+  };
+}
+
+function invalidateSnapshot() {
+  cachedSnapshot = null;
+}
+
 function emit() {
+  invalidateSnapshot();
   listeners.forEach((l) => l());
 }
 
 export function subscribeQuests(listener: Listener) {
   listeners.add(listener);
-  return () => listeners.delete(listener);
+  return () => {
+    listeners.delete(listener);
+  };
 }
 
 export function getQuestDef(id: string): QuestDef | undefined {
@@ -134,13 +160,12 @@ export function recordMonsterKill(monsterId: number): string[] {
   return completedTitles;
 }
 
-export function getQuestSnapshot() {
-  return {
-    money: loadMoney(),
-    quests: loadQuestProgress(),
-  };
+/** useSyncExternalStore 用。同一内容なら同一参照を返す */
+export function getQuestSnapshot(): QuestSnapshot {
+  if (!cachedSnapshot) cachedSnapshot = readSnapshot();
+  return cachedSnapshot;
 }
 
-export function getServerQuestSnapshot() {
-  return { money: DEFAULT_MONEY, quests: [] as QuestProgress[] };
+export function getServerQuestSnapshot(): QuestSnapshot {
+  return SERVER_SNAPSHOT;
 }

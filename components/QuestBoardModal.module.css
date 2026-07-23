@@ -1,0 +1,124 @@
+.root {
+  position: fixed;
+  inset: 0;
+  z-index: 20000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 10, 16, 0.62);
+  font-family: "Segoe UI", "Hiragino Sans", sans-serif;
+  user-select: none;
+}
+
+.panel {
+  width: min(380px, 92vw);
+  max-height: min(78vh, 520px);
+  display: flex;
+  flex-direction: column;
+  padding: 16px 14px 12px;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #3a2a1c 0%, #2a1e14 100%);
+  border: 2px solid rgba(210, 170, 110, 0.65);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+  color: #f5ead6;
+}
+
+.title {
+  margin: 0 0 4px;
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-align: center;
+  color: #ffe7b0;
+}
+
+.sub {
+  margin: 0 0 14px;
+  font-size: 12px;
+  text-align: center;
+  opacity: 0.75;
+}
+
+.list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.card {
+  padding: 12px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid rgba(220, 180, 120, 0.28);
+}
+
+.cardTitle {
+  margin: 0 0 6px;
+  font-size: 14px;
+  font-weight: 800;
+  color: #fff3d4;
+}
+
+.cardDesc {
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #e0d0b8;
+}
+
+.meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.reward {
+  color: #ffe082;
+}
+
+.accept {
+  padding: 7px 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 220, 140, 0.45);
+  background: linear-gradient(180deg, #c48a3a, #8f5a1e);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.accept:disabled {
+  opacity: 0.55;
+  cursor: default;
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.empty {
+  margin: 12px 0;
+  text-align: center;
+  font-size: 13px;
+  opacity: 0.7;
+}
+
+.close {
+  width: 100%;
+  padding: 11px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(0, 0, 0, 0.35);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.close:hover {
+  background: rgba(0, 0, 0, 0.48);
+}

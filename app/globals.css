@@ -379,6 +379,69 @@ body {
   cursor: pointer;
 }
 
+.fh-quest-list {
+  margin: 0 0 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: min(42vh, 320px);
+  overflow-y: auto;
+}
+.fh-quest-item {
+  padding: 10px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+.fh-quest-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+  font-size: 13px;
+}
+.fh-quest-item-head .active {
+  color: #9ad0ff;
+  font-size: 11px;
+  font-weight: 800;
+}
+.fh-quest-item-head .done {
+  color: #b9f6ca;
+  font-size: 11px;
+  font-weight: 800;
+}
+.fh-quest-desc {
+  margin: 0 0 8px !important;
+  font-size: 12px !important;
+  line-height: 1.4;
+  color: #c5d0e4;
+}
+.fh-quest-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+.fh-quest-bar {
+  flex: 1;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.4);
+  overflow: hidden;
+}
+.fh-quest-bar > div {
+  height: 100%;
+  background: linear-gradient(90deg, #4caf70, #8bc34a);
+}
+.fh-quest-reward {
+  font-size: 11px;
+  color: #ffe082;
+  font-weight: 700;
+}
+
 .fh-status {
   pointer-events: auto;
   position: absolute;
@@ -604,7 +667,7 @@ body {
   }
   .fh-topbar {
     top: auto;
-    bottom: calc(158px + env(safe-area-inset-bottom, 0px));
+    bottom: calc(120px + env(safe-area-inset-bottom, 0px));
     left: 8px;
     right: 8px;
     transform: none;
@@ -630,6 +693,7 @@ body {
   }
   .field-chat {
     left: 44px;
+    height: 150px;
   }
 }
 
@@ -649,10 +713,10 @@ body {
 }
 .field-chat {
   position: fixed;
-  left: 16px;
+  left: 40px;
   bottom: 16px;
-  width: min(420px, calc(100vw - 32px));
-  height: 260px;
+  width: min(380px, calc(100vw - 56px));
+  height: 168px;
 }
 .chat-panel-head {
   padding: 6px 10px;

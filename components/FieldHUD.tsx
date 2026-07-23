@@ -1,8 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import SettingsModal from "./SettingsModal";
+import {
+  getQuestDef,
+  getQuestSnapshot,
+  getServerQuestSnapshot,
+  subscribeQuests,
+} from "../lib/quests";
 
 type SideId = "world" | "bag" | "skill" | "quest" | "guild" | "gacha";
 
@@ -17,7 +23,7 @@ const SIDE_ITEMS: { id: SideId; label: string; title: string; body: string }[] =
     id: "bag",
     label: "もちもの",
     title: "もちもの / 装備",
-    body: "装備やアイテムはここから見る予定。いまは準備中。",
+    body: "装備やアイテムはここから見る予定。武器は城下町の武器屋で変えられる。",
   },
   {
     id: "skill",
@@ -28,8 +34,8 @@ const SIDE_ITEMS: { id: SideId; label: string; title: string; body: string }[] =
   {
     id: "quest",
     label: "クエスト",
-    title: "クエスト",
-    body: "クエストボードをここに出す予定。",
+    title: "所持クエスト",
+    body: "",
   },
   {
     id: "guild",
@@ -53,12 +59,19 @@ type Props = {
   maxHp?: number;
   exp?: number;
   maxExp?: number;
-  money?: number;
   locationName?: string;
   playerName?: string;
   bgmEnabled?: boolean;
   onToggleBgm?: () => void;
 };
+
+function useQuestSnap() {
+  return useSyncExternalStore(
+    subscribeQuests,
+    getQuestSnapshot,
+    getServerQuestSnapshot
+  );
+}
 
 export default function FieldHUD({
   onReturnTitle,
@@ -68,7 +81,6 @@ export default function FieldHUD({
   maxHp = 40,
   exp = 12,
   maxExp = 100,
-  money = 164,
   locationName = "草原フィールド",
   playerName = "ゆうしゃ",
   bgmEnabled = true,
@@ -79,6 +91,7 @@ export default function FieldHUD({
   const [pinnedId, setPinnedId] = useState<SideId | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const { money, quests } = useQuestSnap();
 
   useEffect(() => setMounted(true), []);
 
@@ -86,6 +99,19 @@ export default function FieldHUD({
   const active = SIDE_ITEMS.find((s) => s.id === activeId) ?? null;
 
   if (!mounted) return null;
+
+  const owned = quests
+    .map((q) => {
+      const def = getQuestDef(q.questId);
+      if (!def) return null;
+      return { ...q, def };
+    })
+    .filter(Boolean) as {
+    questId: string;
+    status: "active" | "completed";
+    progress: number;
+    def: NonNullable<ReturnType<typeof getQuestDef>>;
+  }[];
 
   const ui = (
     <div
@@ -132,7 +158,48 @@ export default function FieldHUD({
         {active && active.id !== "world" && (
           <div className="fh-side-panel">
             <h3>{active.title}</h3>
-            <p>{active.body}</p>
+            {active.id === "quest" ? (
+              <div className="fh-quest-list">
+                {owned.length === 0 ? (
+                  <p>
+                    所持クエストはありません。城下町のクエストボードで受注できます。
+                  </p>
+                ) : (
+                  owned.map((q) => {
+                    const done = q.status === "completed";
+                    const pct = Math.min(
+                      100,
+                      (q.progress / q.def.targetCount) * 100
+                    );
+                    return (
+                      <div key={q.questId} className="fh-quest-item">
+                        <div className="fh-quest-item-head">
+                          <strong>{q.def.title}</strong>
+                          <span className={done ? "done" : "active"}>
+                            {done ? "達成" : "進行中"}
+                          </span>
+                        </div>
+                        <p className="fh-quest-desc">{q.def.description}</p>
+                        <div className="fh-quest-progress">
+                          <div className="fh-quest-bar">
+                            <div style={{ width: `${pct}%` }} />
+                          </div>
+                          <span>
+                            {q.progress} / {q.def.targetCount}
+                          </span>
+                        </div>
+                        <div className="fh-quest-reward">
+                          報酬: {q.def.rewardMoney.toLocaleString()} 円
+                          {done ? "（受取済）" : ""}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            ) : (
+              <p>{active.body}</p>
+            )}
             <button
               type="button"
               className="fh-side-close"
