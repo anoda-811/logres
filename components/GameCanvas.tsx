@@ -9,17 +9,21 @@ type Props = {
   areaId?: AreaId;
   onOpenQuestBoard?: () => void;
   onOpenWeaponShop?: () => void;
+  onOpenArmorShop?: () => void;
 };
 
 /** 城下町のクエストボードマス（スポーン付近） */
 const QUEST_BOARD = { col: 7, row: 6 };
 /** 城下町の武器屋（鍛冶屋）マス */
 const WEAPON_SMITH = { col: 4, row: 9 };
+/** 城下町の防具屋マス */
+const ARMOR_SMITH = { col: 10, row: 9 };
 
 export default function GameCanvasIso({
   areaId = "field",
   onOpenQuestBoard,
   onOpenWeaponShop,
+  onOpenArmorShop,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const router = useRouter();
@@ -28,6 +32,8 @@ export default function GameCanvasIso({
   questBoardRef.current = onOpenQuestBoard;
   const weaponShopRef = useRef(onOpenWeaponShop);
   weaponShopRef.current = onOpenWeaponShop;
+  const armorShopRef = useRef(onOpenArmorShop);
+  armorShopRef.current = onOpenArmorShop;
 
   // 本体
   useEffect(() => {
@@ -95,7 +101,11 @@ export default function GameCanvasIso({
       { col: 6, row: 2 }, { col: 6, row: 3 }, { col: 6, row: 4 }
     ];
     const blocked: { col: number; row: number }[] = isTown
-      ? [...rockBlocked, { col: WEAPON_SMITH.col, row: WEAPON_SMITH.row }]
+      ? [
+          ...rockBlocked,
+          { col: WEAPON_SMITH.col, row: WEAPON_SMITH.row },
+          { col: ARMOR_SMITH.col, row: ARMOR_SMITH.row },
+        ]
       : rockBlocked;
 
     // モンスター設置（倒した敵は一定時間後に復活）
@@ -110,6 +120,8 @@ export default function GameCanvasIso({
     slimeImg.src = "/slime.png";
     const smithImg = new Image();
     smithImg.src = "/blacksmith.png";
+    const armorSmithImg = new Image();
+    armorSmithImg.src = "/armorsmith.png";
 
     const inBounds = (c: number, r: number) => c >= 0 && c < cols && r >= 0 && r < rows;
     const isBlocked = (c: number, r: number) => blocked.some(b => b.col === c && b.row === r);
@@ -402,10 +414,12 @@ export default function GameCanvasIso({
       ctx.restore();
     };
 
-    const drawWeaponSmith = (
+    const drawTownNpc = (
       ctx: CanvasRenderingContext2D,
       col: number,
       row: number,
+      img: HTMLImageElement,
+      label: string,
       highlight: null | "ok" | "far" = null
     ) => {
       const p = isoToScreen(col, row);
@@ -415,14 +429,13 @@ export default function GameCanvasIso({
       const dy = Math.round(p.y - drawH * 0.92);
 
       ctx.save();
-      // 影
       ctx.fillStyle = "rgba(0,0,0,0.28)";
       ctx.beginPath();
       ctx.ellipse(p.x, p.y + 4, drawW * 0.32, tileH * 0.22, 0, 0, Math.PI * 2);
       ctx.fill();
 
-      if (smithImg.complete && smithImg.naturalWidth > 0) {
-        ctx.drawImage(smithImg, dx, dy, drawW, drawH);
+      if (img.complete && img.naturalWidth > 0) {
+        ctx.drawImage(img, dx, dy, drawW, drawH);
       } else {
         ctx.fillStyle = "#6a5040";
         ctx.fillRect(dx + drawW * 0.25, dy + drawH * 0.2, drawW * 0.5, drawH * 0.7);
@@ -455,19 +468,18 @@ export default function GameCanvasIso({
         ctx.strokeRect(x, y, w, h);
       }
 
-      // 名前札
       ctx.fillStyle = "rgba(0,0,0,0.55)";
       ctx.fillRect(p.x - 28, p.y + 8, 56, 16);
       ctx.fillStyle = "#ffe7b0";
       ctx.font = "bold 11px sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText("武器屋", p.x, p.y + 16);
+      ctx.fillText(label, p.x, p.y + 16);
       ctx.restore();
     };
 
-    const getSmithBounds = () => {
-      const p = isoToScreen(WEAPON_SMITH.col, WEAPON_SMITH.row);
+    const getNpcBounds = (col: number, row: number) => {
+      const p = isoToScreen(col, row);
       const drawH = Math.round(tileH * 2.35);
       const drawW = Math.round(drawH * 0.85);
       return {
@@ -543,6 +555,9 @@ export default function GameCanvasIso({
     /** 武器屋NPCホバー */
     let hoverSmith = false;
     let pendingSmithTap = false;
+    /** 防具屋NPC */
+    let hoverArmorSmith = false;
+    let pendingArmorSmithTap = false;
     /** ボード操作に必要な距離（マス。同じマス〜隣まで） */
     const QUEST_BOARD_REACH = 1;
 
@@ -564,9 +579,14 @@ export default function GameCanvasIso({
       );
     }
 
-    function hitWeaponSmith(worldX: number, worldY: number): boolean {
+    function hitNpcAt(
+      worldX: number,
+      worldY: number,
+      col: number,
+      row: number
+    ): boolean {
       if (!isTown) return false;
-      const b = getSmithBounds();
+      const b = getNpcBounds(col, row);
       const pad = 4;
       return (
         worldX >= b.left - pad &&
@@ -574,6 +594,14 @@ export default function GameCanvasIso({
         worldY >= b.top - pad &&
         worldY <= b.bottom + pad
       );
+    }
+
+    function hitWeaponSmith(worldX: number, worldY: number): boolean {
+      return hitNpcAt(worldX, worldY, WEAPON_SMITH.col, WEAPON_SMITH.row);
+    }
+
+    function hitArmorSmith(worldX: number, worldY: number): boolean {
+      return hitNpcAt(worldX, worldY, ARMOR_SMITH.col, ARMOR_SMITH.row);
     }
 
     function isNearCell(col: number, row: number): boolean {
@@ -592,6 +620,10 @@ export default function GameCanvasIso({
 
     function isNearWeaponSmith(): boolean {
       return isNearCell(WEAPON_SMITH.col, WEAPON_SMITH.row);
+    }
+
+    function isNearArmorSmith(): boolean {
+      return isNearCell(ARMOR_SMITH.col, ARMOR_SMITH.row);
     }
 
     function openQuestBoardNow() {
@@ -625,6 +657,23 @@ export default function GameCanvasIso({
         weaponShopRef.current?.();
       } catch (e) {
         console.error("weapon shop open failed", e);
+      }
+    }
+
+    function openArmorShopNow() {
+      if (!isNearArmorSmith()) {
+        pushChatMessage("防具屋にもっと近づいてみよう", "system");
+        flashCell = {
+          col: ARMOR_SMITH.col,
+          row: ARMOR_SMITH.row,
+          until: performance.now() + 400,
+        };
+        return;
+      }
+      try {
+        armorShopRef.current?.();
+      } catch (e) {
+        console.error("armor shop open failed", e);
       }
     }
 
@@ -702,9 +751,14 @@ export default function GameCanvasIso({
       hover.row = cell.row;
       pendingBoardTap = hitQuestBoardSign(w.x, w.y);
       pendingSmithTap = !pendingBoardTap && hitWeaponSmith(w.x, w.y);
+      pendingArmorSmithTap =
+        !pendingBoardTap && !pendingSmithTap && hitArmorSmith(w.x, w.y);
       // 看板／NPC押しのときはマス移動にしない
       pendingTap =
-        pendingBoardTap || pendingSmithTap || cell.col < 0
+        pendingBoardTap ||
+        pendingSmithTap ||
+        pendingArmorSmithTap ||
+        cell.col < 0
           ? null
           : { col: cell.col, row: cell.row };
 
@@ -716,6 +770,9 @@ export default function GameCanvasIso({
         } else if (!movedEnough && pendingSmithTap) {
           longPressActive = true;
           openWeaponShopNow();
+        } else if (!movedEnough && pendingArmorSmithTap) {
+          longPressActive = true;
+          openArmorShopNow();
         } else if (!movedEnough && pendingTap) {
           longPressActive = true;
           issueMoveTo(pendingTap, true);
@@ -731,7 +788,10 @@ export default function GameCanvasIso({
       hover.row = cell.row;
       hoverBoard = hitQuestBoardSign(w.x, w.y);
       hoverSmith = !hoverBoard && hitWeaponSmith(w.x, w.y);
-      canvas.style.cursor = hoverBoard || hoverSmith ? "pointer" : "";
+      hoverArmorSmith =
+        !hoverBoard && !hoverSmith && hitArmorSmith(w.x, w.y);
+      canvas.style.cursor =
+        hoverBoard || hoverSmith || hoverArmorSmith ? "pointer" : "";
 
       if (!pointerDown) return;
 
@@ -744,6 +804,7 @@ export default function GameCanvasIso({
         pendingTap = null;
         pendingBoardTap = false;
         pendingSmithTap = false;
+        pendingArmorSmithTap = false;
         active.col = -1;
         active.row = -1;
         longActive.col = -1;
@@ -761,7 +822,13 @@ export default function GameCanvasIso({
         return;
       }
 
-      if (longPressActive && !pendingBoardTap && !pendingSmithTap && cell.col >= 0) {
+      if (
+        longPressActive &&
+        !pendingBoardTap &&
+        !pendingSmithTap &&
+        !pendingArmorSmithTap &&
+        cell.col >= 0
+      ) {
         issueMoveTo(cell, true);
       }
     };
@@ -775,6 +842,8 @@ export default function GameCanvasIso({
           openQuestBoardNow();
         } else if (pendingSmithTap) {
           openWeaponShopNow();
+        } else if (pendingArmorSmithTap) {
+          openArmorShopNow();
         } else if (pendingTap) {
           issueMoveTo(pendingTap, false);
         }
@@ -785,6 +854,7 @@ export default function GameCanvasIso({
       pendingTap = null;
       pendingBoardTap = false;
       pendingSmithTap = false;
+      pendingArmorSmithTap = false;
       state.current.dragging = false;
       if (longPressTimer) {
         clearTimeout(longPressTimer);
@@ -802,6 +872,7 @@ export default function GameCanvasIso({
     const onPointerLeave = () => {
       hoverBoard = false;
       hoverSmith = false;
+      hoverArmorSmith = false;
       canvas.style.cursor = "";
     };
     canvas.addEventListener("pointerleave", onPointerLeave);
@@ -1060,7 +1131,28 @@ export default function GameCanvasIso({
             ? "ok"
             : "far"
           : null;
-        drawWeaponSmith(ctx, WEAPON_SMITH.col, WEAPON_SMITH.row, shl);
+        drawTownNpc(
+          ctx,
+          WEAPON_SMITH.col,
+          WEAPON_SMITH.row,
+          smithImg,
+          "武器屋",
+          shl
+        );
+
+        const ahl = hoverArmorSmith
+          ? isNearArmorSmith()
+            ? "ok"
+            : "far"
+          : null;
+        drawTownNpc(
+          ctx,
+          ARMOR_SMITH.col,
+          ARMOR_SMITH.row,
+          armorSmithImg,
+          "防具屋",
+          ahl
+        );
       }
       
       // モンスター描画

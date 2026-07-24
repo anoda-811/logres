@@ -30,7 +30,7 @@ export const DEFAULT_FIELD_MONSTERS: FieldMonster[] = [
 ];
 
 /** 倒してから復活するまでの時間（ミリ秒） */
-export const MONSTER_RESPAWN_MS = 30_000;
+export const MONSTER_RESPAWN_MS = 8_000;
 
 const DEFEATED_KEY = "defeatedMonstersUntil";
 

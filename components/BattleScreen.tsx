@@ -1,12 +1,18 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type CSSProperties,
+} from "react";
 import ChatPanel from "./ChatPanel";
 import { getMonster, markMonsterDefeated } from "../lib/monsters";
 import { getActiveCharacter } from "../lib/characters";
 import { recordMonsterKill } from "../lib/quests";
-import { getEquippedWeapon } from "../lib/weapons";
+import { getTotalAtkBonus, rollCritical } from "../lib/equipment";
 import {
   getServerSpeechBubble,
   getSpeechBubble,
@@ -23,9 +29,22 @@ type Command = {
   effect?: string;
 };
 
-const MAX_SP = 3;
+const MAX_SP = 5;
+
+/** SP 0〜5 のオーブ／ゲージ色 */
+const SP_COLORS: Record<
+  number,
+  { c1: string; c2: string; glow: string }
+> = {
+  0: { c1: "#f2f5fa", c2: "#8a96a8", glow: "rgba(200,210,230,0.65)" },
+  1: { c1: "#c8f4ff", c2: "#2eb0e8", glow: "rgba(60,190,255,0.75)" },
+  2: { c1: "#d4ff9e", c2: "#2aaa48", glow: "rgba(80,220,90,0.7)" },
+  3: { c1: "#fff4a8", c2: "#e0a010", glow: "rgba(255,200,40,0.8)" },
+  4: { c1: "#ffd690", c2: "#e07010", glow: "rgba(255,150,30,0.8)" },
+  5: { c1: "#ffb8d0", c2: "#e02050", glow: "rgba(255,60,110,0.8)" },
+};
 /** 1SPたまるまでの秒数（一定ペース） */
-const SEC_PER_SP = 2.2;
+const SEC_PER_SP = 4.5;
 const PLAYER_SP_RATE = 1 / SEC_PER_SP;
 /** 1秒あたりの敵ゲージ（満タンまで約3.5秒で攻撃） */
 const ENEMY_GAUGE_RATE = 0.28;
@@ -105,11 +124,15 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
   const [damagePopup, setDamagePopup] = useState<{
     side: "enemy" | "player";
     value: number;
+    critical?: boolean;
+    label?: string;
   } | null>(null);
 
   const playerMaxHp = 40;
-  const selectedCmd = COMMANDS.find((c) => c.id === selected) ?? COMMANDS[0];
-  const spFloor = Math.floor(playerSp);
+  const spFloor = Math.min(MAX_SP, Math.floor(playerSp));
+  /** 次のSPまでの貯まり具合（満タン時は1） */
+  const spFrac = playerSp >= MAX_SP ? 1 : playerSp - Math.floor(playerSp);
+  const spTone = SP_COLORS[spFloor] ?? SP_COLORS[0];
 
   const playerHpRef = useRef(playerHp);
   const enemyHpRef = useRef(enemyHp);
@@ -132,8 +155,17 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
     return () => clearTimeout(t);
   }, [result, router]);
 
-  const flashDamage = (side: "enemy" | "player", value: number) => {
-    setDamagePopup({ side, value });
+  const flashDamage = (
+    side: "enemy" | "player",
+    value: number,
+    opts?: { critical?: boolean; label?: string }
+  ) => {
+    setDamagePopup({
+      side,
+      value,
+      critical: opts?.critical,
+      label: opts?.label,
+    });
     if (side === "enemy") {
       setShakeEnemy(true);
       setTimeout(() => setShakeEnemy(false), 280);
@@ -141,7 +173,7 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
       setShakePlayer(true);
       setTimeout(() => setShakePlayer(false), 280);
     }
-    setTimeout(() => setDamagePopup(null), 600);
+    setTimeout(() => setDamagePopup(null), opts?.critical ? 900 : 700);
   };
 
   const performEnemyAttack = () => {
@@ -207,13 +239,21 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
     setMenuOpen(false);
     setPlayerSp((s) => Math.max(0, s - cmd.cost));
 
-    const dmg =
+    let dmg =
       cmd.power +
-      getEquippedWeapon().atkBonus +
+      getTotalAtkBonus() +
       Math.floor(Math.random() * 4);
+    const critical = rollCritical();
+    if (critical) {
+      dmg = Math.max(dmg + 1, Math.round(dmg * 1.5));
+    }
     const nextEnemyHp = Math.max(0, enemyHpRef.current - dmg);
-    flashDamage("enemy", dmg);
-    pushBattleLog(`${cmd.label}！ ${monster.name} に ${dmg} ダメージ`);
+    flashDamage("enemy", dmg, { critical, label: cmd.label });
+    pushBattleLog(
+      critical
+        ? `クリティカル！ ${cmd.label}！ ${monster.name} に ${dmg} ダメージ`
+        : `${cmd.label}！ ${monster.name} に ${dmg} ダメージ`
+    );
     setEnemyHp(nextEnemyHp);
 
     if (nextEnemyHp <= 0) {
@@ -232,12 +272,10 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
 
   return (
     <div className="lr-battle">
-      <div className="lr-bg-sky" />
-      <div className="lr-bg-grass" />
-      <div className="lr-bg-trees" aria-hidden />
+      <div className="lr-bg-art" aria-hidden />
 
       <div className="lr-field">
-        {/* 敵（左・草原の上） */}
+        {/* 敵（左） */}
         <div className={`lr-actor enemy ${shakeEnemy ? "shake" : ""}`}>
           <img
             src={monster.image}
@@ -262,64 +300,7 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
               </div>
             </div>
           </div>
-          {damagePopup?.side === "enemy" && (
-            <span className="lr-dmg">-{damagePopup.value}</span>
-          )}
         </div>
-
-        {/* スキルメニュー */}
-        {menuOpen && !result && (
-          <div className="lr-skill-menu">
-            <div className="lr-skill-tabs">
-              <button type="button" className="on">
-                スキル
-              </button>
-              <button type="button" disabled>
-                アイテム
-              </button>
-            </div>
-            <p className="lr-sp-now">
-              SP {playerSp.toFixed(1)} / {MAX_SP}
-            </p>
-            <ul className="lr-skill-list">
-              {COMMANDS.map((cmd) => {
-                const disabled =
-                  acting || (cmd.id !== "flee" && spFloor < cmd.cost);
-                return (
-                  <li key={cmd.id}>
-                    <button
-                      type="button"
-                      className={`lr-skill-item ${selected === cmd.id ? "selected" : ""} ${disabled ? "disabled" : ""}`}
-                      disabled={disabled}
-                      onMouseEnter={() => setSelected(cmd.id)}
-                      onFocus={() => setSelected(cmd.id)}
-                      onClick={() => doCommand(cmd)}
-                    >
-                      <span className="cost">{cmd.cost}</span>
-                      <span className="name">{cmd.label}</span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-            {selectedCmd && (
-              <div className="lr-skill-tip">
-                <p className="tip-cost">コスト: {selectedCmd.cost} SP</p>
-                <p className="tip-desc">{selectedCmd.desc}</p>
-                <p className="tip-fx">
-                  {selectedCmd.effect ? `効果: ${selectedCmd.effect}` : "\u00a0"}
-                </p>
-              </div>
-            )}
-            <button
-              type="button"
-              className="lr-skill-close"
-              onClick={() => setMenuOpen(false)}
-            >
-              とじる
-            </button>
-          </div>
-        )}
 
         {/* プレイヤー（右） */}
         <div className={`lr-actor player ${shakePlayer ? "shake" : ""}`}>
@@ -331,47 +312,136 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
             className="lr-char-hit"
             disabled={!!result}
             onClick={() => setMenuOpen((v) => !v)}
-            title="タップでスキル"
+            title="スキル"
           >
             <img src="/chara.png" alt="プレイヤー" draggable={false} />
           </button>
           <div className="lr-player-meta">
             <span className="lr-name">{playerName}</span>
-            <div className="lr-hp">
+            <div
+              className={`lr-sp-row sp-${spFloor}`}
+              title={`スキルポイント ${spFloor}/${MAX_SP}`}
+              style={
+                {
+                  ["--sp-c1" as string]: spTone.c1,
+                  ["--sp-c2" as string]: spTone.c2,
+                  ["--sp-glow" as string]: spTone.glow,
+                } as CSSProperties
+              }
+            >
               <div
-                className="fill"
-                style={{ width: `${(playerHp / playerMaxHp) * 100}%` }}
-              />
-            </div>
-            <div className="lr-gauge-wrap player" title="スキルポイント">
-              <span className="lr-gauge-label">SP</span>
-              <div className="lr-sp-segs" aria-label={`SP ${spFloor}/${MAX_SP}`}>
-                {Array.from({ length: MAX_SP }).map((_, i) => {
-                  // 各マスが等しく1SP分。0.0〜1.0 でそのマスの貯まり具合
-                  const fill = Math.min(1, Math.max(0, playerSp - i));
-                  return (
-                    <div key={i} className="lr-sp-seg">
-                      <div
-                        className="lr-sp-seg-fill"
-                        style={{ width: `${fill * 100}%` }}
-                      />
-                    </div>
-                  );
-                })}
+                className="lr-sp-orb"
+                aria-label={`SP ${spFloor}`}
+                style={{
+                  backgroundColor: spTone.c2,
+                  backgroundImage: `radial-gradient(circle at 30% 26%, rgba(255,255,255,0.95) 0%, rgba(255,255,255,0) 40%), radial-gradient(circle at 50% 58%, ${spTone.c1} 0%, ${spTone.c2} 70%, #1a2028 100%)`,
+                  boxShadow: `0 0 12px ${spTone.glow}, 0 2px 4px rgba(0,0,0,0.35), inset 0 -4px 8px rgba(0,0,0,0.3)`,
+                }}
+              >
+                <span>{spFloor}</span>
               </div>
-              <span className="lr-sp-num">
-                {spFloor}/{MAX_SP}
-              </span>
+              <div className="lr-sp-bars">
+                <div className="lr-hp">
+                  <div
+                    className="fill"
+                    style={{ width: `${(playerHp / playerMaxHp) * 100}%` }}
+                  />
+                </div>
+                <div className="lr-sp-rail" aria-hidden>
+                  <div
+                    className="lr-sp-rail-fill"
+                    style={{
+                      width: `${Math.max(spFrac * 100, spFrac > 0 ? 4 : 0)}%`,
+                      background: `linear-gradient(90deg, ${spTone.c1}, ${spTone.c2})`,
+                      boxShadow: `0 0 8px ${spTone.glow}`,
+                    }}
+                  />
+                </div>
+              </div>
             </div>
           </div>
-          {damagePopup?.side === "player" && (
-            <span className="lr-dmg player">-{damagePopup.value}</span>
-          )}
-          {!menuOpen && !result && (
-            <p className="lr-hint">キャラをタップ → スキル選択</p>
-          )}
         </div>
+
+        {/* 中央スキル（キャラタップで開く・オーバーレイ） */}
+        {menuOpen && !result && (
+          <div className="lr-skill-menu">
+            <div className="lr-skill-tabs">
+              <button type="button" className="on">
+                スキル
+              </button>
+              <button type="button" disabled>
+                アイテム
+              </button>
+            </div>
+            <div className="lr-skill-body">
+              <p className="lr-sp-now">
+                SP {spFloor}/{MAX_SP}
+              </p>
+              <ul className="lr-skill-list">
+                {COMMANDS.filter((c) => c.id !== "flee").map((cmd) => {
+                  const disabled = acting || spFloor < cmd.cost;
+                  return (
+                    <li key={cmd.id}>
+                      <button
+                        type="button"
+                        className={`lr-skill-item ${selected === cmd.id ? "selected" : ""} ${disabled ? "disabled" : ""}`}
+                        disabled={disabled}
+                        onMouseEnter={() => setSelected(cmd.id)}
+                        onFocus={() => setSelected(cmd.id)}
+                        onClick={() => doCommand(cmd)}
+                      >
+                        <span className="cost">{cmd.cost}</span>
+                        <span className="name">{cmd.label}</span>
+                      </button>
+                    </li>
+                  );
+                })}
+                <li className="lr-skill-spacer" aria-hidden />
+                {COMMANDS.filter((c) => c.id === "flee").map((cmd) => (
+                  <li key={cmd.id}>
+                    <button
+                      type="button"
+                      className={`lr-skill-item flee ${selected === cmd.id ? "selected" : ""}`}
+                      disabled={acting}
+                      onMouseEnter={() => setSelected(cmd.id)}
+                      onFocus={() => setSelected(cmd.id)}
+                      onClick={() => doCommand(cmd)}
+                    >
+                      <span className="cost">{cmd.cost}</span>
+                      <span className="name">{cmd.label}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <div className="lr-skill-foot">
+              <button
+                type="button"
+                className="lr-skill-auto"
+                onClick={() => setMenuOpen(false)}
+              >
+                AUTO OFF
+              </button>
+            </div>
+          </div>
+        )}
       </div>
+
+      {/* ダメージは battle 直下（フィールド外）で見切れ防止 */}
+      {damagePopup && (
+        <div
+          className={`lr-dmg-wrap ${damagePopup.side === "player" ? "player" : ""} ${
+            damagePopup.critical ? "crit" : ""
+          }`}
+        >
+          {damagePopup.label && (
+            <span className="lr-dmg-skill">{damagePopup.label}</span>
+          )}
+          <span className="lr-dmg-glow">
+            <span className="lr-dmg">{damagePopup.value}</span>
+          </span>
+        </div>
+      )}
 
       {/* 下部バー：チャット左 */}
       <div className="lr-dock">

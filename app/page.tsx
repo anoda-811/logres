@@ -7,6 +7,7 @@ import FieldBgm from "../components/FieldBgm";
 import WorldMapModal from "../components/WorldMapModal";
 import QuestBoardModal from "../components/QuestBoardModal";
 import WeaponShopModal from "../components/WeaponShopModal";
+import ArmorShopModal from "../components/ArmorShopModal";
 import WorldSelectScreen, {
   type WorldInfo,
 } from "../components/WorldSelectScreen";
@@ -30,6 +31,7 @@ export default function Page() {
   const [mapOpen, setMapOpen] = useState(false);
   const [questBoardOpen, setQuestBoardOpen] = useState(false);
   const [weaponShopOpen, setWeaponShopOpen] = useState(false);
+  const [armorShopOpen, setArmorShopOpen] = useState(false);
   const [bgmEnabled, setBgmEnabled] = useState(true);
 
   const area = getArea(areaId);
@@ -58,6 +60,7 @@ export default function Page() {
     setMapOpen(false);
     setQuestBoardOpen(false);
     setWeaponShopOpen(false);
+    setArmorShopOpen(false);
   };
 
   const travelTo = (id: AreaId) => {
@@ -95,6 +98,7 @@ export default function Page() {
             areaId={areaId}
             onOpenQuestBoard={() => setQuestBoardOpen(true)}
             onOpenWeaponShop={() => setWeaponShopOpen(true)}
+            onOpenArmorShop={() => setArmorShopOpen(true)}
           />
           <FieldHUD
             onReturnTitle={returnToTitle}
@@ -118,6 +122,10 @@ export default function Page() {
           <WeaponShopModal
             open={weaponShopOpen}
             onClose={() => setWeaponShopOpen(false)}
+          />
+          <ArmorShopModal
+            open={armorShopOpen}
+            onClose={() => setArmorShopOpen(false)}
           />
         </>
       ) : (

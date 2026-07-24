@@ -3,6 +3,7 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import SettingsModal from "./SettingsModal";
+import InventoryModal from "./InventoryModal";
 import {
   getQuestDef,
   getQuestSnapshot,
@@ -23,7 +24,7 @@ const SIDE_ITEMS: { id: SideId; label: string; title: string; body: string }[] =
     id: "bag",
     label: "もちもの",
     title: "もちもの / 装備",
-    body: "装備やアイテムはここから見る予定。武器は城下町の武器屋で変えられる。",
+    body: "",
   },
   {
     id: "skill",
@@ -91,6 +92,7 @@ export default function FieldHUD({
   const [pinnedId, setPinnedId] = useState<SideId | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [inventoryOpen, setInventoryOpen] = useState(false);
   const { money, quests } = useQuestSnap();
 
   useEffect(() => setMounted(true), []);
@@ -134,18 +136,28 @@ export default function FieldHUD({
             <button
               key={item.id}
               type="button"
-              className={`fh-side-tab ${activeId === item.id ? "is-active" : ""}`}
+              className={`fh-side-tab ${
+                activeId === item.id || (item.id === "bag" && inventoryOpen)
+                  ? "is-active"
+                  : ""
+              }`}
               onMouseEnter={() => {
-                if (item.id !== "world") setHoverId(item.id);
+                if (item.id !== "world" && item.id !== "bag") setHoverId(item.id);
               }}
               onFocus={() => {
-                if (item.id !== "world") setHoverId(item.id);
+                if (item.id !== "world" && item.id !== "bag") setHoverId(item.id);
               }}
               onClick={() => {
                 if (item.id === "world") {
                   setPinnedId(null);
                   setHoverId(null);
                   onOpenWorldMap?.();
+                  return;
+                }
+                if (item.id === "bag") {
+                  setPinnedId(null);
+                  setHoverId(null);
+                  setInventoryOpen(true);
                   return;
                 }
                 setPinnedId((cur) => (cur === item.id ? null : item.id));
@@ -155,7 +167,7 @@ export default function FieldHUD({
             </button>
           ))}
         </div>
-        {active && active.id !== "world" && (
+        {active && active.id !== "world" && active.id !== "bag" && (
           <div className="fh-side-panel">
             <h3>{active.title}</h3>
             {active.id === "quest" ? (
@@ -215,32 +227,42 @@ export default function FieldHUD({
       </aside>
 
       <div className="fh-status" style={{ pointerEvents: "auto" }}>
-        <div className="fh-status-head">
-          {playerName}
-          <span className="fh-status-lv"> Lv.{level}</span>
+        <div className="fh-status-lvbox">
+          <span className="fh-status-sword" aria-hidden />
+          <span className="fh-status-lv-label">レベル</span>
+          <span className="fh-status-lv-num">{level}</span>
         </div>
-        <div className="fh-bar-row">
-          <span className="fh-bar-label">HP</span>
-          <div className="fh-bar hp">
-            <div
-              className="fh-bar-fill"
-              style={{ width: `${Math.min(100, (hp / maxHp) * 100)}%` }}
-            />
-            <span className="fh-bar-num">
-              {hp} / {maxHp}
-            </span>
+        <div className="fh-status-bars">
+          <div className="fh-bar-row">
+            <span className="fh-bar-label">HP</span>
+            <div className="fh-bar hp">
+              <div
+                className="fh-bar-fill"
+                style={{ width: `${Math.min(100, (hp / maxHp) * 100)}%` }}
+              />
+              <span className="fh-bar-num">
+                {hp} / {maxHp}
+              </span>
+            </div>
           </div>
-        </div>
-        <div className="fh-bar-row">
-          <span className="fh-bar-label">EXP</span>
-          <div className="fh-bar exp">
-            <div
-              className="fh-bar-fill"
-              style={{ width: `${Math.min(100, (exp / maxExp) * 100)}%` }}
-            />
-            <span className="fh-bar-num">
-              {exp} / {maxExp}
-            </span>
+          <div className="fh-bar-row">
+            <span className="fh-bar-label">EXP</span>
+            <div className="fh-bar exp">
+              <div
+                className="fh-bar-fill"
+                style={{ width: `${Math.min(100, (exp / maxExp) * 100)}%` }}
+              />
+              <span className="fh-bar-num">
+                {exp} / {maxExp}
+              </span>
+            </div>
+          </div>
+          <div className="fh-bar-row">
+            <span className="fh-bar-label">名声</span>
+            <div className="fh-bar fame">
+              <div className="fh-bar-fill" style={{ width: "42%" }} />
+              <span className="fh-bar-num">420 / 1000</span>
+            </div>
           </div>
         </div>
       </div>
@@ -303,6 +325,11 @@ export default function FieldHUD({
         bgmEnabled={bgmEnabled}
         onToggleBgm={() => onToggleBgm?.()}
         onClose={() => setSettingsOpen(false)}
+      />
+      <InventoryModal
+        open={inventoryOpen}
+        playerName={playerName}
+        onClose={() => setInventoryOpen(false)}
       />
     </>
   );
