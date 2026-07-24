@@ -1040,34 +1040,54 @@ body {
   overflow: visible;
 }
 .lr-actor.enemy {
-  left: 8%;
-  top: 38%;
+  left: 5%;
+  top: 26%;
   bottom: auto;
   align-items: center;
 }
 .lr-actor.player {
   right: 8%;
-  top: 22%;
+  top: 18%;
   bottom: auto;
   align-items: center;
+  gap: 0;
+}
+.lr-player-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
   gap: 1px;
+  margin-top: -38px;
+  position: relative;
+  z-index: 3;
 }
 .lr-enemy-meta {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 3px;
-  margin-top: 0;
+  margin-top: -28px;
+  position: relative;
+  z-index: 3;
 }
 .lr-name.enemy {
   color: #4a1810;
   font-size: 12px;
 }
+/* 敵スプライトは共通枠＋足元揃え（種類で見た目位置がズレないように） */
+.lr-enemy-hit {
+  width: min(340px, 54vw);
+  height: min(300px, 48vw);
+  display: grid;
+  place-items: end center;
+  overflow: visible;
+}
 .lr-enemy-img {
-  width: min(190px, 34vw);
-  max-height: 210px;
-  height: auto;
+  width: 100%;
+  height: 100%;
+  max-height: none;
   object-fit: contain;
+  object-position: center bottom;
   filter: drop-shadow(0 12px 12px rgba(0, 0, 0, 0.35));
   pointer-events: none;
 }
@@ -1088,6 +1108,17 @@ body {
   filter: drop-shadow(0 12px 12px rgba(0, 0, 0, 0.35));
   pointer-events: none;
 }
+/* 戦闘用キャラ（左向き原画・大きめ・足元にステータス重ね） */
+.lr-actor.player .lr-char-hit img.lr-battle-chara {
+  width: min(260px, 46vw);
+  max-height: 320px;
+  transform: none;
+}
+/* 敵は反転せず拡大（.lr-char-hit img の scaleX(-1) を上書き） */
+.lr-enemy-hit img.lr-enemy-img {
+  transform: scale(1.28);
+  transform-origin: center bottom;
+}
 .lr-char-hit {
   appearance: none;
   border: none;
@@ -1104,6 +1135,49 @@ body {
 }
 .lr-char-hit:not(:disabled):hover {
   filter: brightness(1.06);
+}
+.lr-enemy-hit .lr-enemy-img {
+  display: block;
+}
+.lr-actor.targeted::after {
+  content: "";
+  position: absolute;
+  right: -14px;
+  top: 42%;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 7px 12px 7px 0;
+  border-color: transparent #e53935 transparent transparent;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.45));
+  pointer-events: none;
+  z-index: 4;
+  animation: target-nudge 0.7s ease-in-out infinite;
+}
+.lr-actor.enemy.targeted::after {
+  right: auto;
+  left: -14px;
+  border-width: 7px 0 7px 12px;
+  border-color: transparent transparent transparent #e53935;
+  animation-name: target-nudge-left;
+}
+@keyframes target-nudge {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  50% {
+    transform: translateX(3px);
+  }
+}
+@keyframes target-nudge-left {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  50% {
+    transform: translateX(-3px);
+  }
 }
 .lr-hp-wrap {
   display: flex;
@@ -1253,7 +1327,8 @@ body {
   border-radius: inherit;
   background: linear-gradient(90deg, var(--sp-c1), var(--sp-c2)) !important;
   box-shadow: 0 0 8px var(--sp-glow);
-  transition: width 0.05s linear;
+  /* JS 直書きで滑らかに動かすので transition は付けない */
+  transition: none;
 }
 .lr-sp-segs {
   display: none;
@@ -1289,14 +1364,16 @@ body {
 }
 .lr-gauge .fill {
   height: 100%;
+  width: 0%;
   background: linear-gradient(90deg, #ff8a65, #e53935);
-  transition: width 0.05s linear;
+  transition: none;
 }
 .lr-gauge .fill.sp {
   background: linear-gradient(90deg, #ffe082, #ffb300);
 }
 .lr-gauge.enemy .fill {
   background: linear-gradient(90deg, #ffab91, #d84315);
+  transition: none;
 }
 .lr-sp-num {
   font-size: 12px;
@@ -1308,8 +1385,68 @@ body {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 2px;
-  margin-top: 0;
+  gap: 1px;
+  margin-top: -38px;
+  position: relative;
+  z-index: 3;
+}
+.lr-buffs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px;
+  margin: 0;
+  height: 12px;
+  min-height: 12px;
+}
+.lr-buffs.empty {
+  visibility: hidden;
+  pointer-events: none;
+}
+.lr-buff {
+  position: relative;
+  width: 12px;
+  height: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: help;
+  outline: none;
+}
+.lr-buff-icon {
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-bottom: 8px solid #e53935;
+  filter: drop-shadow(0 1px 0 rgba(80, 0, 0, 0.75));
+}
+.lr-buff-tip {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 7px);
+  transform: translateX(-50%);
+  white-space: nowrap;
+  max-width: min(240px, 70vw);
+  background: #000;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.35;
+  letter-spacing: 0.02em;
+  padding: 5px 8px;
+  border-radius: 2px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  z-index: 30;
+  transition: opacity 0.08s ease;
+}
+.lr-buff:hover .lr-buff-tip,
+.lr-buff:focus-visible .lr-buff-tip {
+  opacity: 1;
+  visibility: visible;
 }
 .lr-name {
   font-weight: 800;
@@ -1335,6 +1472,73 @@ body {
 }
 .lr-hint {
   display: none;
+}
+/* 技名バナー（味方=青・自位置上 / 敵=赤・敵位置上） */
+.lr-skill-banner {
+  position: absolute;
+  z-index: 40;
+  min-width: 140px;
+  padding: 5px 28px 6px;
+  text-align: center;
+  font-size: clamp(14px, 2.2vw, 17px);
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: #fff;
+  border: 1px solid #0a1a30;
+  border-radius: 1px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.25),
+    0 2px 8px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  white-space: nowrap;
+}
+.lr-skill-banner.player {
+  top: 42%;
+  right: calc(8% + min(120px, 21vw));
+  left: auto;
+  transform: translateX(50%);
+  background: linear-gradient(
+    180deg,
+    #2460b8 0%,
+    #2f78d4 42%,
+    #3a8ae8 100%
+  );
+  animation: skill-banner-in-player 0.18s ease-out;
+}
+.lr-skill-banner.enemy {
+  top: 56%;
+  left: calc(5% + min(130px, 24vw));
+  right: auto;
+  transform: translateX(-50%);
+  background: linear-gradient(
+    180deg,
+    #a82020 0%,
+    #d03030 42%,
+    #e84848 100%
+  );
+  border-color: #3a0a0a;
+  animation: skill-banner-in-enemy 0.18s ease-out;
+}
+@keyframes skill-banner-in-player {
+  from {
+    opacity: 0;
+    transform: translateX(50%) translateY(-6px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(50%) translateY(0) scale(1);
+  }
+}
+@keyframes skill-banner-in-enemy {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-6px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0) scale(1);
+  }
 }
 .lr-dmg-wrap {
   position: absolute;
@@ -1362,21 +1566,27 @@ body {
   transform: translateX(50%);
   animation: battle-pop-player 0.8s ease forwards;
 }
-.lr-dmg-skill {
-  padding: 3px 12px 4px;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  color: #fff;
-  background: rgba(40, 90, 170, 0.72);
-  border: 1px solid rgba(220, 235, 255, 0.75);
-  border-radius: 2px;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
-  white-space: nowrap;
+/* 反撃時：敵が寄っている位置（自キャラ寄り）にダメージ */
+.lr-dmg-wrap.near {
+  left: auto;
+  right: max(140px, 24%);
+  top: 30%;
+  transform: translateX(40%);
+  animation: battle-pop-near 0.8s ease forwards;
 }
-.lr-dmg-wrap.crit .lr-dmg-skill {
-  background: rgba(140, 90, 20, 0.78);
-  border-color: rgba(255, 230, 150, 0.85);
+@keyframes battle-pop-near {
+  0% {
+    transform: translateX(40%) translateY(8px) scale(0.7);
+    opacity: 0;
+  }
+  18% {
+    transform: translateX(40%) translateY(-4px) scale(1.08);
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(40%) translateY(-18px) scale(1);
+    opacity: 0;
+  }
 }
 /* filterを文字本体に付けると上が切れるので外側へ */
 .lr-dmg-glow {
@@ -1496,6 +1706,196 @@ body {
 }
 .lr-actor.shake {
   animation: battle-shake 0.28s linear;
+}
+.lr-enemy-img.shake,
+.lr-battle-chara.shake {
+  animation: battle-shake 0.28s linear;
+}
+.lr-actor.player.lunge,
+.lr-actor.player[data-motion="lunge"] {
+  z-index: 6;
+  animation: player-lunge 0.95s ease-in-out both;
+}
+.lr-actor.player.lunge-swing,
+.lr-actor.player[data-motion="lunge-swing"] {
+  z-index: 6;
+  animation: player-lunge-swing 1.4s ease-in-out both;
+}
+.lr-actor.player.lunge-smash,
+.lr-actor.player[data-motion="lunge-smash"] {
+  z-index: 6;
+  animation: player-lunge-smash 1.12s ease-in-out both;
+}
+.lr-actor.player.lunge-spin,
+.lr-actor.player[data-motion="lunge-spin"] {
+  z-index: 6;
+  animation: player-lunge-spin-move 1.25s ease-in-out both;
+}
+.lr-actor.player.lunge-spin .lr-battle-chara,
+.lr-actor.player[data-motion="lunge-spin"] .lr-battle-chara {
+  animation: player-spin-slash 1.25s ease-in-out both;
+}
+.lr-actor.player.lunge-spin::before,
+.lr-actor.player[data-motion="lunge-spin"]::before {
+  content: "";
+  position: absolute;
+  left: 35%;
+  top: 28%;
+  width: min(120px, 22vw);
+  height: min(120px, 22vw);
+  margin-left: calc(-1 * min(60px, 11vw));
+  border-radius: 50%;
+  border: 3px solid transparent;
+  border-top-color: rgba(255, 220, 80, 0.85);
+  border-right-color: rgba(255, 180, 40, 0.55);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 5;
+  animation: balmung-ring 1.25s ease-out both;
+}
+.lr-actor.player.counter,
+.lr-actor.player[data-motion="counter"] {
+  z-index: 7;
+  animation: player-counter-strike 0.78s ease-in-out both;
+}
+/* 接近／後退は transition で連続（クラス切替の瞬間移動を防ぐ） */
+.lr-actor.enemy {
+  transition: transform 0.56s ease-in;
+  will-change: transform;
+}
+.lr-actor.enemy.near {
+  z-index: 6;
+  transform: translate(min(74vw, 940px), calc(-1 * min(18vh, 145px))) scale(1.12);
+  transition: transform 0.48s ease-out;
+}
+@keyframes player-lunge {
+  0% {
+    transform: translate(0, 0) scale(1);
+  }
+  38% {
+    transform: translate(calc(-1 * min(78vw, 980px)), min(20vh, 160px)) scale(1.06);
+  }
+  48% {
+    transform: translate(calc(-1 * min(74vw, 940px)), min(18vh, 145px)) scale(1.12);
+  }
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+}
+/* フルスイング：敵の目の前で止まって振りかぶ → 斬る → 戻る */
+@keyframes player-lunge-swing {
+  0% {
+    transform: translate(0, 0) scale(1) rotate(0deg);
+  }
+  /* 接近 */
+  24% {
+    transform: translate(calc(-1 * min(56vw, 700px)), min(14vh, 115px)) scale(1.04)
+      rotate(-6deg);
+  }
+  /* 目の前で停止しつつ振りかぶる */
+  36% {
+    transform: translate(calc(-1 * min(54vw, 670px)), min(11vh, 90px)) scale(1.06)
+      rotate(-26deg);
+  }
+  48% {
+    transform: translate(calc(-1 * min(52vw, 650px)), min(9vh, 72px)) scale(1.08)
+      rotate(-34deg);
+  }
+  /* 斬りおろし */
+  58% {
+    transform: translate(calc(-1 * min(68vw, 860px)), min(18vh, 150px)) scale(1.14)
+      rotate(24deg);
+  }
+  68% {
+    transform: translate(calc(-1 * min(62vw, 780px)), min(15vh, 125px)) scale(1.08)
+      rotate(8deg);
+  }
+  /* 戻り */
+  100% {
+    transform: translate(0, 0) scale(1) rotate(0deg);
+  }
+}
+/* キラースマッシュ：一気に突っ込んで強打 */
+@keyframes player-lunge-smash {
+  0% {
+    transform: translate(0, 0) scale(1);
+  }
+  18% {
+    transform: translate(min(4vw, 36px), 2%) scale(0.96);
+  }
+  45% {
+    transform: translate(calc(-1 * min(80vw, 1000px)), min(18vh, 150px)) scale(1.18);
+  }
+  55% {
+    transform: translate(calc(-1 * min(72vw, 920px)), min(20vh, 160px)) scale(1.08);
+  }
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+}
+/* バルムンク：接近しながら回転斬り */
+@keyframes player-lunge-spin-move {
+  0% {
+    transform: translate(0, 0) scale(1);
+  }
+  40% {
+    transform: translate(calc(-1 * min(78vw, 980px)), min(18vh, 150px)) scale(1.08);
+  }
+  52% {
+    transform: translate(calc(-1 * min(74vw, 940px)), min(16vh, 135px)) scale(1.16);
+  }
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+}
+@keyframes player-spin-slash {
+  0% {
+    transform: rotate(0deg);
+  }
+  40% {
+    transform: rotate(-400deg);
+  }
+  55% {
+    transform: rotate(-520deg);
+  }
+  100% {
+    transform: rotate(-720deg);
+  }
+}
+@keyframes balmung-ring {
+  0% {
+    opacity: 0;
+    transform: scale(0.4) rotate(0deg);
+  }
+  35% {
+    opacity: 0;
+  }
+  45% {
+    opacity: 0.95;
+    transform: scale(1) rotate(120deg);
+  }
+  70% {
+    opacity: 0.55;
+    transform: scale(1.35) rotate(280deg);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.7) rotate(420deg);
+  }
+}
+@keyframes player-counter-strike {
+  0% {
+    transform: translate(0, 0) scale(1);
+  }
+  35% {
+    transform: translate(calc(-1 * min(8vw, 56px)), 4%) scale(1.08);
+  }
+  55% {
+    transform: translate(calc(-1 * min(10vw, 70px)), 5%) scale(1.12);
+  }
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
 }
 @keyframes battle-shake {
   0%,
@@ -1622,6 +2022,24 @@ body {
   color: rgba(220, 230, 220, 0.9);
   font-variant-numeric: tabular-nums;
 }
+.lr-skill-item .cost.sp-0 {
+  color: #d0d8e4;
+}
+.lr-skill-item .cost.sp-1 {
+  color: #3ec8ff;
+}
+.lr-skill-item .cost.sp-2 {
+  color: #7dff5c;
+}
+.lr-skill-item .cost.sp-3 {
+  color: #ffd24a;
+}
+.lr-skill-item .cost.sp-4 {
+  color: #ff9a3a;
+}
+.lr-skill-item .cost.sp-5 {
+  color: #ff5a90;
+}
 .lr-skill-item .name {
   font-weight: 700;
   letter-spacing: 0.02em;
@@ -1634,6 +2052,64 @@ body {
     rgba(20, 80, 90, 0.2)
   );
   box-shadow: inset 0 0 0 1px rgba(80, 200, 210, 0.2);
+}
+.lr-skill-item.selected .name {
+  color: #0a1210;
+  font-weight: 800;
+}
+.lr-skill-item.selected.sp-cost-0 {
+  background: linear-gradient(
+    90deg,
+    rgba(160, 170, 185, 0.55),
+    rgba(110, 120, 135, 0.35) 60%,
+    rgba(40, 50, 60, 0.15)
+  );
+  box-shadow: inset 0 0 0 1px rgba(200, 210, 220, 0.25);
+}
+.lr-skill-item.selected.sp-cost-1 {
+  background: linear-gradient(
+    90deg,
+    rgba(40, 180, 230, 0.7),
+    rgba(30, 140, 200, 0.45) 60%,
+    rgba(20, 80, 120, 0.15)
+  );
+  box-shadow: inset 0 0 0 1px rgba(80, 210, 255, 0.35);
+}
+.lr-skill-item.selected.sp-cost-2 {
+  background: linear-gradient(
+    90deg,
+    rgba(80, 210, 70, 0.65),
+    rgba(40, 160, 50, 0.4) 60%,
+    rgba(20, 80, 30, 0.15)
+  );
+  box-shadow: inset 0 0 0 1px rgba(120, 255, 100, 0.3);
+}
+.lr-skill-item.selected.sp-cost-3 {
+  background: linear-gradient(
+    90deg,
+    rgba(230, 180, 30, 0.7),
+    rgba(190, 130, 20, 0.45) 60%,
+    rgba(90, 60, 10, 0.15)
+  );
+  box-shadow: inset 0 0 0 1px rgba(255, 220, 80, 0.35);
+}
+.lr-skill-item.selected.sp-cost-4 {
+  background: linear-gradient(
+    90deg,
+    rgba(230, 130, 30, 0.7),
+    rgba(190, 90, 20, 0.45) 60%,
+    rgba(90, 40, 10, 0.15)
+  );
+  box-shadow: inset 0 0 0 1px rgba(255, 170, 60, 0.35);
+}
+.lr-skill-item.selected.sp-cost-5 {
+  background: linear-gradient(
+    90deg,
+    rgba(230, 50, 100, 0.7),
+    rgba(180, 30, 70, 0.45) 60%,
+    rgba(90, 15, 40, 0.15)
+  );
+  box-shadow: inset 0 0 0 1px rgba(255, 100, 150, 0.35);
 }
 .lr-skill-item.disabled,
 .lr-skill-item:disabled {
@@ -1725,6 +2201,108 @@ body {
   font-size: 18px;
 }
 
+/* ===== 勝利リザルト（Time / Exp / Poro）ログレス風 ===== */
+.lr-clear {
+  position: absolute;
+  left: 6%;
+  top: 18%;
+  z-index: 22;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  width: min(440px, 54%);
+  pointer-events: none;
+  animation: lr-clear-in 0.5s ease both;
+}
+.lr-fadeout {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  background: #000;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.9s ease;
+}
+.lr-fadeout.on {
+  opacity: 1;
+}
+.lr-skill-backdrop {
+  appearance: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  position: absolute;
+  inset: 0;
+  z-index: 9;
+  background: transparent;
+  cursor: default;
+}
+.lr-clear-row {
+  position: relative;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 10px;
+}
+.lr-clear-row::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  border-radius: 2px;
+  background: linear-gradient(
+    90deg,
+    rgba(90, 55, 18, 0.95) 0%,
+    rgba(120, 80, 28, 0.85) 42%,
+    rgba(90, 60, 20, 0.35) 78%,
+    transparent 100%
+  );
+  box-shadow: 0 1px 0 rgba(255, 230, 160, 0.22);
+}
+.lr-clear-label,
+.lr-clear-value {
+  font-family: "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif;
+  font-style: italic;
+  font-weight: 700;
+  line-height: 0.95;
+  color: #ffe9a8;
+  -webkit-text-fill-color: #ffe9a8;
+  text-shadow:
+    0 1px 0 #5a3a12,
+    0 2px 0 #3d280c,
+    1px 2px 0 #2a1a08,
+    -1px 1px 0 #2a1a08,
+    0 3px 6px rgba(0, 0, 0, 0.45);
+}
+.lr-clear-label {
+  font-size: clamp(36px, 5vw, 52px);
+  letter-spacing: 0.01em;
+  flex: 0 0 auto;
+}
+.lr-clear-value {
+  font-size: clamp(30px, 4vw, 44px);
+  letter-spacing: 0.03em;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  flex: 1 1 auto;
+}
+.lr-clear-line {
+  display: none;
+}
+@keyframes lr-clear-in {
+  from {
+    opacity: 0;
+    transform: translateX(-16px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
 @media (max-width: 800px) {
   /* 戦闘: フィールドと同じく狭い画面は枠いっぱい */
   .lr-battle-shell {
@@ -1745,24 +2323,56 @@ body {
     min-height: 0;
   }
   .lr-actor.enemy {
-    left: 4%;
-    top: 34%;
+    left: 3%;
+    top: 22%;
     bottom: auto;
   }
   .lr-actor.player {
     right: 4%;
-    top: 18%;
+    top: 14%;
     bottom: auto;
-    gap: 1px;
+    gap: 0;
+  }
+  .lr-skill-banner.player {
+    top: 40%;
+    right: calc(4% + min(90px, 24vw));
+  }
+  .lr-skill-banner.enemy {
+    top: 52%;
+    left: calc(4% + min(80px, 22vw));
+  }
+  .lr-dmg-wrap.near {
+    right: max(80px, 18%);
+    top: 28%;
+  }
+  .lr-enemy-hit {
+    width: min(260px, 60vw);
+    height: min(230px, 52vw);
+  }
+  .lr-enemy-hit img.lr-enemy-img {
+    transform: scale(1.22);
+    transform-origin: center bottom;
   }
   .lr-enemy-img,
   .lr-actor > img {
     width: min(130px, 34vw);
     max-height: 140px;
   }
+  .lr-enemy-hit .lr-enemy-img {
+    width: 100%;
+    height: 100%;
+    max-height: none;
+  }
   .lr-char-hit img {
     width: min(110px, 28vw);
     max-height: 130px;
+  }
+  .lr-actor.player .lr-char-hit img.lr-battle-chara {
+    width: min(190px, 52vw);
+    max-height: 240px;
+  }
+  .lr-actor.player .lr-player-meta {
+    margin-top: -28px;
   }
   .lr-hp {
     width: 90px;
@@ -1841,23 +2451,43 @@ body {
     height: 100%;
   }
   .lr-actor.enemy {
-    left: 3%;
-    top: 32%;
+    left: 2%;
+    top: 20%;
     bottom: auto;
   }
   .lr-actor.player {
     right: 2%;
-    top: 16%;
+    top: 12%;
     bottom: auto;
+  }
+  .lr-enemy-hit {
+    width: min(220px, 62vw);
+    height: min(200px, 56vw);
+  }
+  .lr-enemy-hit img.lr-enemy-img {
+    transform: scale(1.18);
+    transform-origin: center bottom;
   }
   .lr-enemy-img,
   .lr-actor > img {
     width: min(110px, 32vw);
     max-height: 120px;
   }
+  .lr-enemy-hit .lr-enemy-img {
+    width: 100%;
+    height: 100%;
+    max-height: none;
+  }
   .lr-char-hit img {
     width: min(96px, 26vw);
     max-height: 112px;
+  }
+  .lr-actor.player .lr-char-hit img.lr-battle-chara {
+    width: min(170px, 56vw);
+    max-height: 210px;
+  }
+  .lr-actor.player .lr-player-meta {
+    margin-top: -24px;
   }
   .lr-skill-menu {
     top: 10%;

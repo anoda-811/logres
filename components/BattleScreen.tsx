@@ -10,7 +10,7 @@ import {
 } from "react";
 import { getMonster, markMonsterDefeated } from "../lib/monsters";
 import { getActiveCharacter } from "../lib/characters";
-import { recordMonsterKill } from "../lib/quests";
+import { addExp, addMoney, recordMonsterKill } from "../lib/quests";
 import { getTotalAtkBonus, rollCritical } from "../lib/equipment";
 import {
   getServerSpeechBubble,
@@ -24,8 +24,11 @@ type Command = {
   label: string;
   cost: number;
   power: number;
+  /** attack = 敵選択時 / self = 自分選択時 */
+  kind: "attack" | "self";
   desc: string;
   effect?: string;
+  buff?: "counter" | "revenge" | "powerStance" | "courage" | "charge";
 };
 
 const MAX_SP = 5;
@@ -48,46 +51,108 @@ const PLAYER_SP_RATE = 1 / SEC_PER_SP;
 /** 1秒あたりの敵ゲージ（満タンまで約3.5秒で攻撃） */
 const ENEMY_GAUGE_RATE = 0.28;
 
-const COMMANDS: Command[] = [
+/** 敵を選んだときに出す攻撃スキル */
+const ATTACK_SKILLS: Command[] = [
   {
     id: "attack",
     label: "通常攻撃",
     cost: 0,
     power: 8,
-    desc: "いつでも使える基本攻撃。",
+    kind: "attack",
+    desc: "選んだ敵に基本攻撃。",
   },
   {
     id: "slash",
-    label: "スラッシュ",
+    label: "フルスイング",
     cost: 1,
     power: 14,
+    kind: "attack",
     desc: "SPを1消費する攻撃。",
     effect: "小〜中威力",
   },
   {
     id: "heavy",
-    label: "ヘヴィスラッシュ",
+    label: "キラースマッシュ",
     cost: 2,
     power: 22,
+    kind: "attack",
     desc: "SPを2消費する強攻撃。",
     effect: "中威力",
   },
   {
     id: "power",
-    label: "パワーアタック",
+    label: "バルムンク",
     cost: 3,
     power: 32,
+    kind: "attack",
     desc: "SPを3消費する最強攻撃。",
     effect: "高威力",
+  },
+];
+
+/** 自分を選んだときに出す強化・反撃など */
+const SELF_SKILLS: Command[] = [
+  {
+    id: "counter",
+    label: "反撃",
+    cost: 2,
+    power: 0,
+    kind: "self",
+    buff: "counter",
+    desc: "敵の攻撃に3回まで反撃する。",
+  },
+  {
+    id: "revenge",
+    label: "復讐",
+    cost: 3,
+    power: 0,
+    kind: "self",
+    buff: "revenge",
+    desc: "敵の攻撃に3回まで強い反撃をする。",
+  },
+  {
+    id: "powerStance",
+    label: "パワースタンス",
+    cost: 0,
+    power: 0,
+    kind: "self",
+    buff: "powerStance",
+    desc: "しばらく攻撃力が上がる。",
+  },
+  {
+    id: "courage",
+    label: "勇気の剣",
+    cost: 0,
+    power: 0,
+    kind: "self",
+    buff: "courage",
+    desc: "HPを少し回復する。",
+  },
+  {
+    id: "charge",
+    label: "パワーチャージ",
+    cost: 1,
+    power: 0,
+    kind: "self",
+    buff: "charge",
+    desc: "次の攻撃の威力を上げる。",
   },
   {
     id: "flee",
     label: "逃げる",
     cost: 0,
     power: 0,
+    kind: "self",
     desc: "戦闘から離脱してマップへ戻る。",
   },
 ];
+
+type BattleEnemy = {
+  /** バトル内の対象ID（複数敵対応用） */
+  battleId: string;
+  instanceId: string | null;
+  monsterId: number;
+};
 
 type Props = {
   monsterId: string | null;
@@ -100,6 +165,15 @@ function useBubble() {
     getSpeechBubble,
     getServerSpeechBubble
   );
+}
+
+function formatBattleTime(ms: number) {
+  const clamped = Math.max(0, Math.floor(ms));
+  const cs = Math.floor((clamped % 1000) / 10);
+  const totalSec = Math.floor(clamped / 1000);
+  const sec = totalSec % 60;
+  const min = Math.floor(totalSec / 60);
+  return `${String(min).padStart(2, "0")}' ${String(sec).padStart(2, "0")}" ${String(cs).padStart(2, "0")}`;
 }
 
 export default function BattleScreen({ monsterId, instanceId }: Props) {
@@ -116,54 +190,234 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
   const [enemyGauge, setEnemyGauge] = useState(0);
   const [acting, setActing] = useState(false);
   const [result, setResult] = useState<"win" | "lose" | "flee" | null>(null);
-  const [menuOpen, setMenuOpen] = useState(false);
+  const [clearStats, setClearStats] = useState<{
+    timeMs: number;
+    exp: number;
+    money: number;
+  } | null>(null);
+  const [fadeOut, setFadeOut] = useState(false);
+  /** null=閉 / self=自分強化 / attack=敵への攻撃 */
+  const [menuMode, setMenuMode] = useState<"self" | "attack" | null>(null);
+  /** 攻撃対象の battleId（複数敵対応） */
+  const [targetId, setTargetId] = useState<string | null>(null);
   const [selected, setSelected] = useState<string>("attack");
   const [shakeEnemy, setShakeEnemy] = useState(false);
   const [shakePlayer, setShakePlayer] = useState(false);
+  const [playerMotion, setPlayerMotion] = useState<
+    "idle" | "lunge" | "lunge-swing" | "lunge-smash" | "lunge-spin" | "counter"
+  >("idle");
+  /** 同じ技連続でもアニメを再発火させる */
+  const [motionNonce, setMotionNonce] = useState(0);
+  /** 敵がプレイヤー付近にいる（接近・反撃中） */
+  const [enemyNear, setEnemyNear] = useState(false);
+  /** 反撃の種類（1=反撃 / 2=復讐） */
+  const [counterRank, setCounterRank] = useState(0);
+  /** 反撃の残り回数 */
+  const [counterCharges, setCounterCharges] = useState(0);
+  /** 攻撃力バフ（残りヒット数） */
+  const [atkBuffHits, setAtkBuffHits] = useState(0);
+  const [atkBuffValue, setAtkBuffValue] = useState(0);
+  /** 次の攻撃を強化 */
+  const [charged, setCharged] = useState(false);
   const [damagePopup, setDamagePopup] = useState<{
     side: "enemy" | "player";
     value: number;
     critical?: boolean;
-    label?: string;
+    /** 反撃時など、敵が近い位置にダメージを出す */
+    atNear?: boolean;
   } | null>(null);
+  /** 技名バナー（青=味方 / 赤=敵） */
+  const [skillBanner, setSkillBanner] = useState<{
+    side: "player" | "enemy";
+    name: string;
+  } | null>(null);
+
+  const enemies: BattleEnemy[] = [
+    {
+      battleId: "e0",
+      instanceId,
+      monsterId: monster.id,
+    },
+  ];
 
   const playerMaxHp = 40;
   const spFloor = Math.min(MAX_SP, Math.floor(playerSp));
   /** 次のSPまでの貯まり具合（満タン時は1） */
   const spFrac = playerSp >= MAX_SP ? 1 : playerSp - Math.floor(playerSp);
   const spTone = SP_COLORS[spFloor] ?? SP_COLORS[0];
+  const menuSkills =
+    menuMode === "attack"
+      ? ATTACK_SKILLS
+      : menuMode === "self"
+        ? SELF_SKILLS
+        : [];
+  const menuOpen = menuMode !== null;
+
+  type BuffIcon = { id: string; tip: string };
+  const buffIcons: BuffIcon[] = [];
+  if (atkBuffHits > 0) {
+    buffIcons.push({
+      id: "stance",
+      tip: `パワースタンス：攻撃力+${atkBuffValue}（残り${atkBuffHits}回）`,
+    });
+  }
+  if (charged) {
+    buffIcons.push({
+      id: "charge",
+      tip: "パワーチャージ：次の攻撃の威力アップ",
+    });
+  }
+  if (counterCharges > 0) {
+    buffIcons.push({
+      id: "counter",
+      tip:
+        counterRank >= 2
+          ? `復讐：強い反撃（残り${counterCharges}回）`
+          : `反撃：敵が近づいたら反撃（残り${counterCharges}回）`,
+    });
+  }
 
   const playerHpRef = useRef(playerHp);
   const enemyHpRef = useRef(enemyHp);
   const resultRef = useRef(result);
+  const actingRef = useRef(false);
+  const enemyBusyRef = useRef(false);
+  const counterRankRef = useRef(0);
+  const counterChargesRef = useRef(0);
+  const pendingAttackRef = useRef<{
+    cmd: Command;
+    targetId: string;
+  } | null>(null);
+  const atkBuffHitsRef = useRef(0);
+  const atkBuffValueRef = useRef(0);
+  const chargedRef = useRef(false);
+  const spFloorRef = useRef(0);
+  const playerSpLiveRef = useRef(0);
+  const spFillRef = useRef<HTMLDivElement | null>(null);
+  const enemyGaugeFillRef = useRef<HTMLDivElement | null>(null);
+  const displayedSpFloorRef = useRef(0);
+  const battleStartedAt = useRef(
+    typeof performance !== "undefined" ? performance.now() : Date.now()
+  );
   playerHpRef.current = playerHp;
   enemyHpRef.current = enemyHp;
   resultRef.current = result;
+  actingRef.current = acting;
+  counterRankRef.current = counterRank;
+  counterChargesRef.current = counterCharges;
+  atkBuffHitsRef.current = atkBuffHits;
+  atkBuffValueRef.current = atkBuffValue;
+  chargedRef.current = charged;
+  spFloorRef.current = spFloor;
+
+  const paintSpFill = (s: number) => {
+    const frac = s >= MAX_SP ? 1 : s - Math.floor(s);
+    if (spFillRef.current) {
+      spFillRef.current.style.width = `${Math.max(frac * 100, frac > 0 ? 4 : 0)}%`;
+    }
+  };
+
+  const paintEnemyGauge = (g: number) => {
+    if (enemyGaugeFillRef.current) {
+      enemyGaugeFillRef.current.style.width = `${Math.max(0, Math.min(1, g)) * 100}%`;
+    }
+  };
+
+  const commitPlayerSp = (next: number) => {
+    const clamped = Math.max(0, Math.min(MAX_SP, next));
+    playerSpLiveRef.current = clamped;
+    const floor = Math.min(MAX_SP, Math.floor(clamped));
+    spFloorRef.current = floor;
+    displayedSpFloorRef.current = floor;
+    paintSpFill(clamped);
+    setPlayerSp(clamped);
+  };
 
   useEffect(() => {
     pushBattleLog(`${monster.name} があらわれた！`);
-    pushBattleLog("SPは時間でたまる。ためるほど強い技が使えるが、敵も攻撃してくる！");
+    pushBattleLog("敵を選んで攻撃、自分を選んで強化・反撃！");
   }, [monster.name]);
 
+  const setMenuOpenMode = (
+    mode: "self" | "attack" | null,
+    tid: string | null = null
+  ) => {
+    setMenuMode(mode);
+    if (mode === "attack") {
+      setTargetId(tid);
+      setSelected(ATTACK_SKILLS[0]?.id ?? "attack");
+    } else if (mode === "self") {
+      setTargetId(null);
+      setSelected(SELF_SKILLS[0]?.id ?? "counter");
+    } else {
+      setTargetId(null);
+    }
+  };
+
+  const openSelfMenu = () => {
+    if (acting || result || clearStats) return;
+    if (menuMode === "self") {
+      setMenuOpenMode(null);
+      return;
+    }
+    setMenuOpenMode("self");
+  };
+
+  const openAttackMenu = (enemyBattleId: string) => {
+    if (acting || result || clearStats) return;
+    if (menuMode === "attack" && targetId === enemyBattleId) {
+      setMenuOpenMode(null);
+      return;
+    }
+    setMenuOpenMode("attack", enemyBattleId);
+  };
+
+  const goField = () => {
+    sessionStorage.setItem("resumeField", "1");
+    router.push("/");
+  };
+
+  // 勝利: リザルトを明るいまま表示 → 少し待って暗転開始 → 真っ暗 → マップ
   useEffect(() => {
-    if (!result) return;
-    const t = setTimeout(() => {
-      sessionStorage.setItem("resumeField", "1");
-      router.push("/");
-    }, result === "flee" ? 700 : 1200);
+    if (!clearStats) return;
+    const holdMs = 1800;
+    const fadeMs = 900;
+    const fadeTimer = setTimeout(() => setFadeOut(true), holdMs);
+    const goTimer = setTimeout(goField, holdMs + fadeMs);
+    return () => {
+      clearTimeout(fadeTimer);
+      clearTimeout(goTimer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clearStats, router]);
+
+  useEffect(() => {
+    if (!result || result === "win") return;
+    const t = setTimeout(goField, result === "flee" ? 700 : 1200);
     return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [result, router]);
+
+  // スキルメニュー外タップで閉じる
+  useEffect(() => {
+    if (!menuOpen || result || clearStats) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMenuOpenMode(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [menuOpen, result, clearStats]);
 
   const flashDamage = (
     side: "enemy" | "player",
     value: number,
-    opts?: { critical?: boolean; label?: string }
+    opts?: { critical?: boolean; atNear?: boolean }
   ) => {
     setDamagePopup({
       side,
       value,
       critical: opts?.critical,
-      label: opts?.label,
+      atNear: opts?.atNear,
     });
     if (side === "enemy") {
       setShakeEnemy(true);
@@ -175,39 +429,240 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
     setTimeout(() => setDamagePopup(null), opts?.critical ? 900 : 700);
   };
 
-  const performEnemyAttack = () => {
-    if (resultRef.current || enemyHpRef.current <= 0) return;
-    const dmg = monster.atk + Math.floor(Math.random() * 3);
-    const nextHp = Math.max(0, playerHpRef.current - dmg);
-    flashDamage("player", dmg);
-    pushBattleLog(`${monster.name} の攻撃！ ${dmg} ダメージ`);
-    setPlayerHp(nextHp);
-    if (nextHp <= 0) {
-      pushBattleLog("たおれてしまった…");
-      setResult("lose");
+  const skillBannerTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showSkillBanner = (side: "player" | "enemy", name: string) => {
+    if (skillBannerTimer.current) clearTimeout(skillBannerTimer.current);
+    setSkillBanner({ side, name });
+    skillBannerTimer.current = setTimeout(() => {
+      setSkillBanner(null);
+      skillBannerTimer.current = null;
+    }, 2000);
+  };
+
+  const pickEnemySkillName = () => {
+    const names =
+      monster.id === 2
+        ? ["急襲", "ウィングクラッシュ", "ついばみ"]
+        : ["ボディブロー", "ぷるぷるパンチ", "スライムアタック"];
+    return names[Math.floor(Math.random() * names.length)];
+  };
+
+  /** 近づいてヒット → 戻る（技ごとに上書き） */
+  const LUNGE_HIT_MS = 420;
+  const LUNGE_TOTAL_MS = 950;
+  /** 攻撃から戻ったあとの硬直 */
+  const ATTACK_RECOVER_MS = 2000;
+  const ENEMY_APPROACH_MS = 480;
+  const COUNTER_STRIKE_MS = 780;
+  const COUNTER_HIT_AT_MS = 320;
+  const ENEMY_RETREAT_MS = 560;
+
+  const attackAnimFor = (skillId: string) => {
+    switch (skillId) {
+      case "slash":
+        return {
+          motion: "lunge-swing" as const,
+          hitMs: 800,
+          totalMs: 1400,
+        };
+      case "heavy":
+        return {
+          motion: "lunge-smash" as const,
+          hitMs: 520,
+          totalMs: 1120,
+        };
+      case "power":
+        return {
+          motion: "lunge-spin" as const,
+          hitMs: 560,
+          totalMs: 1250,
+        };
+      default:
+        return {
+          motion: "lunge" as const,
+          hitMs: LUNGE_HIT_MS,
+          totalMs: LUNGE_TOTAL_MS,
+        };
+    }
+  };
+  const lastAttackTimingRef = useRef({ hitMs: LUNGE_HIT_MS, totalMs: LUNGE_TOTAL_MS });
+
+  const finishEnemyBusy = () => {
+    setEnemyNear(false);
+    enemyBusyRef.current = false;
+    const pending = pendingAttackRef.current;
+    if (
+      pending &&
+      !resultRef.current &&
+      playerHpRef.current > 0 &&
+      enemyHpRef.current > 0
+    ) {
+      pendingAttackRef.current = null;
+      executeAttack(pending.cmd, pending.targetId);
     }
   };
 
-  // SP・敵ゲージのリアルタイム進行
+  const applyKillRewards = () => {
+    pushBattleLog(`${monster.name} をたおした！`);
+    if (instanceId) markMonsterDefeated(instanceId);
+    const done = recordMonsterKill(monster.id);
+    for (const title of done) {
+      pushBattleLog(`クエスト「${title}」を達成！報酬を手に入れた`);
+    }
+    const timeMs = Math.max(
+      0,
+      (typeof performance !== "undefined" ? performance.now() : Date.now()) -
+        battleStartedAt.current
+    );
+    const expGain = monster.expReward;
+    const moneyGain = monster.moneyReward;
+    addExp(expGain);
+    addMoney(moneyGain);
+    setTimeout(() => {
+      setPlayerMotion("idle");
+      setClearStats({ timeMs, exp: expGain, money: moneyGain });
+      setMenuOpenMode(null);
+      setDamagePopup(null);
+      setResult("win");
+    }, Math.max(200, lastAttackTimingRef.current.totalMs - lastAttackTimingRef.current.hitMs));
+  };
+
+  const dealDamageToEnemy = (
+    dmg: number,
+    opts: { critical?: boolean; label?: string; atNear?: boolean }
+  ) => {
+    const nextEnemyHp = Math.max(0, enemyHpRef.current - dmg);
+    flashDamage("enemy", dmg, {
+      critical: opts.critical,
+      atNear: opts.atNear,
+    });
+    pushBattleLog(
+      opts.critical
+        ? `クリティカル！ ${opts.label ?? "攻撃"}！ ${monster.name} に ${dmg} ダメージ`
+        : `${opts.label ?? "攻撃"}！ ${monster.name} に ${dmg} ダメージ`
+    );
+    setEnemyHp(nextEnemyHp);
+    return nextEnemyHp;
+  };
+
+  const performEnemyAttack = () => {
+    if (
+      resultRef.current ||
+      enemyHpRef.current <= 0 ||
+      actingRef.current ||
+      enemyBusyRef.current
+    ) {
+      return;
+    }
+    enemyBusyRef.current = true;
+    setEnemyNear(true);
+    const enemySkill = pickEnemySkillName();
+    showSkillBanner("enemy", enemySkill);
+
+    setTimeout(() => {
+      if (resultRef.current || enemyHpRef.current <= 0) {
+        setEnemyNear(false);
+        setTimeout(finishEnemyBusy, ENEMY_RETREAT_MS);
+        return;
+      }
+
+      // 敵が近くまで来た → ダメージ
+      const dmg = monster.atk + Math.floor(Math.random() * 3);
+      const nextHp = Math.max(0, playerHpRef.current - dmg);
+      flashDamage("player", dmg);
+      pushBattleLog(`${monster.name} の攻撃！ ${dmg} ダメージ`);
+      setPlayerHp(nextHp);
+
+      if (nextHp <= 0) {
+        pushBattleLog("たおれてしまった…");
+        setResult("lose");
+        pendingAttackRef.current = null;
+        setEnemyNear(false);
+        setTimeout(finishEnemyBusy, ENEMY_RETREAT_MS);
+        return;
+      }
+
+      const charges = counterChargesRef.current;
+      const rank = counterRankRef.current;
+
+      if (charges > 0 && rank > 0) {
+        // 近くに留まったままプレイヤーが反撃 → その後敵が戻る
+        const counterName = rank >= 2 ? "復讐" : "反撃";
+        setPlayerMotion("counter");
+        setMotionNonce((n) => n + 1);
+        showSkillBanner("player", counterName);
+        pushBattleLog(`${counterName}が発動！`);
+
+        setTimeout(() => {
+          if (resultRef.current || enemyHpRef.current <= 0) return;
+          const retaliate =
+            (rank >= 2 ? monster.atk * 2 + 6 : monster.atk + 4) +
+            Math.floor(Math.random() * 3);
+          const left = dealDamageToEnemy(retaliate, {
+            label: counterName,
+            atNear: true,
+          });
+          const remain = Math.max(0, counterChargesRef.current - 1);
+          setCounterCharges(remain);
+          if (remain <= 0) setCounterRank(0);
+          if (left <= 0) applyKillRewards();
+        }, COUNTER_HIT_AT_MS);
+
+        setTimeout(() => {
+          setPlayerMotion("idle");
+          setEnemyNear(false);
+          setTimeout(finishEnemyBusy, ENEMY_RETREAT_MS);
+        }, COUNTER_STRIKE_MS);
+        return;
+      }
+
+      // 通常：ヒット後すぐ戻る
+      setTimeout(() => {
+        setEnemyNear(false);
+        setTimeout(finishEnemyBusy, ENEMY_RETREAT_MS);
+      }, 80);
+    }, ENEMY_APPROACH_MS);
+  };
+
+  // SP・敵ゲージのリアルタイム進行（DOM直書きでカクつき防止）
   useEffect(() => {
     if (result) return;
     let raf = 0;
     let last = performance.now();
     let eg = 0;
+    playerSpLiveRef.current = playerSp;
+    paintSpFill(playerSp);
+    paintEnemyGauge(0);
 
     const tick = (now: number) => {
       const dt = Math.min(0.05, (now - last) / 1000);
       last = now;
 
-      setPlayerSp((s) => Math.min(MAX_SP, s + PLAYER_SP_RATE * dt));
+      const nextSp = Math.min(
+        MAX_SP,
+        playerSpLiveRef.current + PLAYER_SP_RATE * dt
+      );
+      playerSpLiveRef.current = nextSp;
+      paintSpFill(nextSp);
 
-      eg += ENEMY_GAUGE_RATE * dt;
-      if (eg >= 1) {
-        eg = 0;
-        setEnemyGauge(0);
-        performEnemyAttack();
-      } else {
-        setEnemyGauge(eg);
+      const floor = Math.min(MAX_SP, Math.floor(nextSp));
+      spFloorRef.current = floor;
+      // オーブ数字／色が変わるときだけ React 更新
+      if (floor !== displayedSpFloorRef.current) {
+        displayedSpFloorRef.current = floor;
+        setPlayerSp(nextSp);
+      }
+
+      if (!actingRef.current && !enemyBusyRef.current) {
+        eg += ENEMY_GAUGE_RATE * dt;
+        if (eg >= 1) {
+          eg = 0;
+          paintEnemyGauge(0);
+          setEnemyGauge(0);
+          performEnemyAttack();
+        } else {
+          paintEnemyGauge(eg);
+        }
       }
 
       raf = requestAnimationFrame(tick);
@@ -218,55 +673,140 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [result, monster.atk]);
 
-  const doCommand = (cmd: Command) => {
+  const doSelfCommand = (cmd: Command) => {
     if (acting || result) return;
-
     if (cmd.id === "flee") {
       setActing(true);
-      setMenuOpen(false);
+      setMenuOpenMode(null);
+      pendingAttackRef.current = null;
       pushBattleLog("戦闘からにげた！");
       setResult("flee");
       return;
     }
-
-    if (spFloor < cmd.cost) {
+    if (spFloorRef.current < cmd.cost) {
       pushBattleLog(`SPが足りない！（必要: ${cmd.cost}）`);
       return;
     }
 
     setActing(true);
-    setMenuOpen(false);
-    setPlayerSp((s) => Math.max(0, s - cmd.cost));
+    setMenuOpenMode(null);
+    commitPlayerSp(playerSpLiveRef.current - cmd.cost);
+    if (cmd.id !== "flee") {
+      showSkillBanner("player", cmd.label);
+    }
+
+    switch (cmd.buff) {
+      case "counter":
+        setCounterRank(1);
+        setCounterCharges(3);
+        pushBattleLog("反撃の構え！（3回）");
+        break;
+      case "revenge":
+        setCounterRank(2);
+        setCounterCharges(3);
+        pushBattleLog("復讐の構え！（3回）");
+        break;
+      case "powerStance":
+        setAtkBuffValue(5);
+        setAtkBuffHits(3);
+        pushBattleLog("パワースタンス！ 攻撃力アップ");
+        break;
+      case "courage": {
+        const heal = 8 + Math.floor(Math.random() * 4);
+        setPlayerHp((h) => Math.min(playerMaxHp, h + heal));
+        pushBattleLog(`勇気の剣！ HPが ${heal} 回復`);
+        break;
+      }
+      case "charge":
+        setCharged(true);
+        pushBattleLog("パワーチャージ！ 次の攻撃が強化される");
+        break;
+      default:
+        break;
+    }
+
+    setTimeout(() => setActing(false), 280);
+  };
+
+  const executeAttack = (cmd: Command, attackTargetId: string) => {
+    if (resultRef.current || enemyHpRef.current <= 0 || playerHpRef.current <= 0) {
+      return;
+    }
+    if (spFloorRef.current < cmd.cost) {
+      pushBattleLog(`SPが足りない！（必要: ${cmd.cost}）`);
+      return;
+    }
+
+    const anim = attackAnimFor(cmd.id);
+    lastAttackTimingRef.current = { hitMs: anim.hitMs, totalMs: anim.totalMs };
+
+    setActing(true);
+    setMenuOpenMode(null);
+    setTargetId(attackTargetId);
+    commitPlayerSp(playerSpLiveRef.current - cmd.cost);
+    // idle を挟まず nonce で再マウントし、アニメを確実に発火
+    setPlayerMotion(anim.motion);
+    setMotionNonce((n) => n + 1);
+    showSkillBanner("player", cmd.label);
 
     let dmg =
       cmd.power +
       getTotalAtkBonus() +
+      (atkBuffHitsRef.current > 0 ? atkBuffValueRef.current : 0) +
       Math.floor(Math.random() * 4);
+    if (chargedRef.current) {
+      dmg = Math.round(dmg * 1.45);
+      setCharged(false);
+    }
+    if (atkBuffHitsRef.current > 0) {
+      setAtkBuffHits((n) => Math.max(0, n - 1));
+    }
     const critical = rollCritical();
     if (critical) {
       dmg = Math.max(dmg + 1, Math.round(dmg * 1.5));
     }
-    const nextEnemyHp = Math.max(0, enemyHpRef.current - dmg);
-    flashDamage("enemy", dmg, { critical, label: cmd.label });
-    pushBattleLog(
-      critical
-        ? `クリティカル！ ${cmd.label}！ ${monster.name} に ${dmg} ダメージ`
-        : `${cmd.label}！ ${monster.name} に ${dmg} ダメージ`
-    );
-    setEnemyHp(nextEnemyHp);
 
-    if (nextEnemyHp <= 0) {
-      pushBattleLog(`${monster.name} をたおした！`);
-      if (instanceId) markMonsterDefeated(instanceId);
-      const done = recordMonsterKill(monster.id);
-      for (const title of done) {
-        pushBattleLog(`クエスト「${title}」を達成！報酬を手に入れた`);
-      }
-      setTimeout(() => setResult("win"), 450);
+    setTimeout(() => {
+      if (resultRef.current) return;
+      const nextEnemyHp = dealDamageToEnemy(dmg, {
+        critical,
+        label: cmd.label,
+      });
+      if (nextEnemyHp <= 0) applyKillRewards();
+    }, anim.hitMs);
+
+    setTimeout(() => {
+      setPlayerMotion("idle");
+      // 倒しても行動ロックは必ず解除
+      setTimeout(() => setActing(false), ATTACK_RECOVER_MS);
+    }, anim.totalMs);
+  };
+
+  const doAttackCommand = (cmd: Command) => {
+    if (acting || result) return;
+    const tid = targetId;
+    if (!tid) {
+      pushBattleLog("攻撃する敵を選んでください！");
+      return;
+    }
+    if (spFloorRef.current < cmd.cost) {
+      pushBattleLog(`SPが足りない！（必要: ${cmd.cost}）`);
       return;
     }
 
-    setTimeout(() => setActing(false), 350);
+    // 敵の攻撃中 → 内部予約（終わったら実行）
+    if (enemyBusyRef.current) {
+      pendingAttackRef.current = { cmd, targetId: tid };
+      setSelected(cmd.id);
+      return;
+    }
+
+    executeAttack(cmd, tid);
+  };
+
+  const doCommand = (cmd: Command) => {
+    if (cmd.kind === "self") doSelfCommand(cmd);
+    else doAttackCommand(cmd);
   };
 
   return (
@@ -275,14 +815,30 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
         <div className="lr-bg-art" aria-hidden />
 
         <div className="lr-field">
-        {/* 敵（左） */}
-        <div className={`lr-actor enemy ${shakeEnemy ? "shake" : ""}`}>
-          <img
-            src={monster.image}
-            alt={monster.name}
-            draggable={false}
-            className="lr-enemy-img"
-          />
+        {/* 敵（左）— タップで攻撃スキル／勝利時は消える */}
+        {result !== "win" && !clearStats && (
+        <div
+          className={`lr-actor enemy ${enemyNear ? "near" : ""} ${
+            menuMode === "attack" && targetId === enemies[0]?.battleId ? "targeted" : ""
+          }`}
+        >
+          <button
+            type="button"
+            className="lr-char-hit lr-enemy-hit"
+            disabled={!!result || !!clearStats || acting}
+            onClick={(e) => {
+              e.stopPropagation();
+              openAttackMenu(enemies[0].battleId);
+            }}
+            title="攻撃スキル"
+          >
+            <img
+              src={monster.image}
+              alt={monster.name}
+              draggable={false}
+              className={`lr-enemy-img${shakeEnemy ? " shake" : ""}`}
+            />
+          </button>
           <div className="lr-enemy-meta">
             <span className="lr-name enemy">{monster.name}</span>
             <div className="lr-hp-wrap">
@@ -296,27 +852,86 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
             <div className="lr-gauge-wrap" title="敵の行動ゲージ">
               <span className="lr-gauge-label">行動</span>
               <div className="lr-gauge enemy">
-                <div className="fill" style={{ width: `${enemyGauge * 100}%` }} />
+                <div
+                  ref={enemyGaugeFillRef}
+                  className="fill"
+                  style={{ width: `${enemyGauge * 100}%` }}
+                />
               </div>
             </div>
           </div>
         </div>
+        )}
 
-        {/* プレイヤー（右） */}
-        <div className={`lr-actor player ${shakePlayer ? "shake" : ""}`}>
+        {/* 勝利リザルト → 表示後に暗転してマップへ */}
+        {clearStats && (
+          <>
+            <div className="lr-clear">
+              <div className="lr-clear-row">
+                <span className="lr-clear-label">Time</span>
+                <span className="lr-clear-value">
+                  {formatBattleTime(clearStats.timeMs)}
+                </span>
+              </div>
+              <div className="lr-clear-row">
+                <span className="lr-clear-label">Exp</span>
+                <span className="lr-clear-value">{clearStats.exp}</span>
+              </div>
+              <div className="lr-clear-row">
+                <span className="lr-clear-label">Poro</span>
+                <span className="lr-clear-value">{clearStats.money}</span>
+              </div>
+            </div>
+            <div
+              className={`lr-fadeout${fadeOut ? " on" : ""}`}
+              aria-hidden
+            />
+          </>
+        )}
+
+        {/* プレイヤー（右）— タップで強化・反撃 */}
+        <div
+          key={`player-motion-${motionNonce}`}
+          className={`lr-actor player${
+            playerMotion !== "idle" ? ` ${playerMotion}` : ""
+          }${menuMode === "self" ? " targeted" : ""}`}
+          data-motion={playerMotion}
+        >
           {bubble && (
             <div className="speech-bubble battle">{bubble.text}</div>
           )}
           <button
             type="button"
             className="lr-char-hit"
-            disabled={!!result}
-            onClick={() => setMenuOpen((v) => !v)}
-            title="スキル"
+            disabled={!!result || !!clearStats || acting}
+            onClick={(e) => {
+              e.stopPropagation();
+              openSelfMenu();
+            }}
+            title="強化・反撃"
           >
-            <img src="/chara.png" alt="プレイヤー" draggable={false} />
+            <img
+              src="/chara-battle.png"
+              alt="プレイヤー"
+              draggable={false}
+              className={`lr-battle-chara${shakePlayer ? " shake" : ""}`}
+            />
           </button>
           <div className="lr-player-meta">
+            <div
+              className={`lr-buffs${buffIcons.length ? "" : " empty"}`}
+              aria-label={buffIcons.length ? "強化効果" : undefined}
+              aria-hidden={buffIcons.length === 0}
+            >
+              {buffIcons.map((b) => (
+                <span key={b.id} className="lr-buff" tabIndex={0}>
+                  <span className="lr-buff-icon" aria-hidden />
+                  <span className="lr-buff-tip" role="tooltip">
+                    {b.tip}
+                  </span>
+                </span>
+              ))}
+            </div>
             <span className="lr-name">{playerName}</span>
             <div
               className={`lr-sp-row sp-${spFloor}`}
@@ -349,6 +964,7 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
                 </div>
                 <div className="lr-sp-rail" aria-hidden>
                   <div
+                    ref={spFillRef}
                     className="lr-sp-rail-fill"
                     style={{
                       width: `${Math.max(spFrac * 100, spFrac > 0 ? 4 : 0)}%`,
@@ -362,90 +978,120 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
           </div>
         </div>
 
-        {/* 中央スキル（キャラタップで開く・オーバーレイ） */}
-        {menuOpen && !result && (
-          <div className="lr-skill-menu">
-            <div className="lr-skill-tabs">
-              <button type="button" className="on">
-                スキル
-              </button>
-              <button type="button" disabled>
-                アイテム
-              </button>
+        {/* 対象別スキル（自分＝強化 / 敵＝攻撃） */}
+        {menuOpen && !result && !clearStats && (
+          <>
+            <button
+              type="button"
+              className="lr-skill-backdrop"
+              aria-label="スキルをとじる"
+              onClick={() => setMenuOpenMode(null)}
+            />
+            <div
+              className={`lr-skill-menu${menuMode === "self" ? " self" : " attack"}`}
+              onClick={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
+            >
+              <div className="lr-skill-tabs">
+                <button type="button" className="on">
+                  {menuMode === "self" ? "スキル" : "攻撃"}
+                </button>
+                <button type="button" disabled>
+                  アイテム
+                </button>
+              </div>
+              <div className="lr-skill-body">
+                <p className="lr-sp-now">
+                  {menuMode === "attack"
+                    ? `${monster.name} をこうげき`
+                    : "じぶんをきょうか"}
+                  {" · "}
+                  SP {spFloor}/{MAX_SP}
+                </p>
+                <ul className="lr-skill-list">
+                  {menuSkills
+                    .filter((c) => c.id !== "flee")
+                    .map((cmd) => {
+                      const disabled = acting || spFloor < cmd.cost;
+                      return (
+                        <li key={cmd.id}>
+                          <button
+                            type="button"
+                            className={`lr-skill-item sp-cost-${cmd.cost} ${selected === cmd.id ? "selected" : ""} ${disabled ? "disabled" : ""}`}
+                            disabled={disabled}
+                            onMouseEnter={() => setSelected(cmd.id)}
+                            onFocus={() => setSelected(cmd.id)}
+                            onClick={() => doCommand(cmd)}
+                          >
+                            <span className={`cost sp-${cmd.cost}`}>{cmd.cost}</span>
+                            <span className="name">{cmd.label}</span>
+                          </button>
+                        </li>
+                      );
+                    })}
+                  {menuMode === "self" && (
+                    <>
+                      <li className="lr-skill-spacer" aria-hidden />
+                      {menuSkills
+                        .filter((c) => c.id === "flee")
+                        .map((cmd) => (
+                          <li key={cmd.id}>
+                            <button
+                              type="button"
+                              className={`lr-skill-item flee sp-cost-${cmd.cost} ${selected === cmd.id ? "selected" : ""}`}
+                              disabled={acting}
+                              onMouseEnter={() => setSelected(cmd.id)}
+                              onFocus={() => setSelected(cmd.id)}
+                              onClick={() => doCommand(cmd)}
+                            >
+                              <span className={`cost sp-${cmd.cost}`}>{cmd.cost}</span>
+                              <span className="name">{cmd.label}</span>
+                            </button>
+                          </li>
+                        ))}
+                    </>
+                  )}
+                </ul>
+              </div>
+              <div className="lr-skill-foot">
+                <button
+                  type="button"
+                  className="lr-skill-auto"
+                  onClick={() => setMenuOpenMode(null)}
+                >
+                  AUTO OFF
+                </button>
+              </div>
             </div>
-            <div className="lr-skill-body">
-              <p className="lr-sp-now">
-                SP {spFloor}/{MAX_SP}
-              </p>
-              <ul className="lr-skill-list">
-                {COMMANDS.filter((c) => c.id !== "flee").map((cmd) => {
-                  const disabled = acting || spFloor < cmd.cost;
-                  return (
-                    <li key={cmd.id}>
-                      <button
-                        type="button"
-                        className={`lr-skill-item ${selected === cmd.id ? "selected" : ""} ${disabled ? "disabled" : ""}`}
-                        disabled={disabled}
-                        onMouseEnter={() => setSelected(cmd.id)}
-                        onFocus={() => setSelected(cmd.id)}
-                        onClick={() => doCommand(cmd)}
-                      >
-                        <span className="cost">{cmd.cost}</span>
-                        <span className="name">{cmd.label}</span>
-                      </button>
-                    </li>
-                  );
-                })}
-                <li className="lr-skill-spacer" aria-hidden />
-                {COMMANDS.filter((c) => c.id === "flee").map((cmd) => (
-                  <li key={cmd.id}>
-                    <button
-                      type="button"
-                      className={`lr-skill-item flee ${selected === cmd.id ? "selected" : ""}`}
-                      disabled={acting}
-                      onMouseEnter={() => setSelected(cmd.id)}
-                      onFocus={() => setSelected(cmd.id)}
-                      onClick={() => doCommand(cmd)}
-                    >
-                      <span className="cost">{cmd.cost}</span>
-                      <span className="name">{cmd.label}</span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </div>
-            <div className="lr-skill-foot">
-              <button
-                type="button"
-                className="lr-skill-auto"
-                onClick={() => setMenuOpen(false)}
-              >
-                AUTO OFF
-              </button>
-            </div>
-          </div>
+          </>
         )}
       </div>
+
+      {/* 技名バナー（ログレス風） */}
+      {skillBanner && (
+        <div
+          className={`lr-skill-banner ${skillBanner.side === "enemy" ? "enemy" : "player"}`}
+          aria-hidden
+        >
+          {skillBanner.name}
+        </div>
+      )}
 
       {/* ダメージは battle 直下（フィールド外）で見切れ防止 */}
       {damagePopup && (
         <div
           className={`lr-dmg-wrap ${damagePopup.side === "player" ? "player" : ""} ${
             damagePopup.critical ? "crit" : ""
-          }`}
+          }${damagePopup.atNear ? " near" : ""}`}
         >
-          {damagePopup.label && (
-            <span className="lr-dmg-skill">{damagePopup.label}</span>
-          )}
           <span className="lr-dmg-glow">
             <span className="lr-dmg">{damagePopup.value}</span>
           </span>
         </div>
       )}
 
-      {result && (
+      {result && result !== "win" && (
         <div className="lr-result">
-          {result === "win" && "勝利！ マップへ…"}
           {result === "flee" && "にげた！ マップへ…"}
           {result === "lose" && "敗北… マップへ…"}
         </div>

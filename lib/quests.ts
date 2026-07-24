@@ -29,18 +29,25 @@ export const QUEST_DEFS: QuestDef[] = [
 
 const QUEST_KEY = "logres.quests";
 const MONEY_KEY = "logres.money";
+const EXP_KEY = "logres.exp";
 const DEFAULT_MONEY = 164;
+const DEFAULT_EXP = 12;
+const MAX_EXP = 100;
 
 type Listener = () => void;
 const listeners = new Set<Listener>();
 
 export type QuestSnapshot = {
   money: number;
+  exp: number;
+  maxExp: number;
   quests: QuestProgress[];
 };
 
 const SERVER_SNAPSHOT: QuestSnapshot = {
   money: DEFAULT_MONEY,
+  exp: DEFAULT_EXP,
+  maxExp: MAX_EXP,
   quests: [],
 };
 
@@ -49,6 +56,8 @@ let cachedSnapshot: QuestSnapshot | null = null;
 function readSnapshot(): QuestSnapshot {
   return {
     money: loadMoney(),
+    exp: loadExp(),
+    maxExp: MAX_EXP,
     quests: loadQuestProgress(),
   };
 }
@@ -109,6 +118,27 @@ export function saveMoney(amount: number) {
 
 export function addMoney(delta: number) {
   saveMoney(loadMoney() + delta);
+}
+
+export function loadExp(): number {
+  if (typeof window === "undefined") return DEFAULT_EXP;
+  try {
+    const raw = localStorage.getItem(EXP_KEY);
+    if (raw == null) return DEFAULT_EXP;
+    const n = Number(raw);
+    return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : DEFAULT_EXP;
+  } catch {
+    return DEFAULT_EXP;
+  }
+}
+
+export function saveExp(amount: number) {
+  localStorage.setItem(EXP_KEY, String(Math.max(0, Math.floor(amount))));
+  emit();
+}
+
+export function addExp(delta: number) {
+  saveExp(loadExp() + delta);
 }
 
 export function getActiveQuests(): QuestProgress[] {

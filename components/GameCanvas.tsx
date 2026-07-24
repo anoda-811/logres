@@ -1,7 +1,7 @@
 "use client";
 import React, { useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { getAliveFieldMonsters, type FieldMonster } from "../lib/monsters";
+import { createRandomFieldMonsters, syncAliveFieldMonsters, MONSTERS, type FieldMonster } from "../lib/monsters";
 import { getSpeechBubble, pushChatMessage } from "../lib/chatStore";
 import type { AreaId } from "../lib/locations";
 
@@ -108,16 +108,38 @@ export default function GameCanvasIso({
         ]
       : rockBlocked;
 
-    // モンスター設置（倒した敵は一定時間後に復活）
-    // 旧フォーマット掃除
+    // モンスター設置（位置は isoToScreen 定義後に初期化）
     sessionStorage.removeItem("defeatedMonster");
     sessionStorage.removeItem("defeatedMonsters");
-    let monsters: FieldMonster[] = isTown ? [] : getAliveFieldMonsters();
-    let lastRespawnCheck = 0;
+    const spawnAvoid = { col: Math.floor(cols / 2), row: Math.floor(rows / 2) };
+    type LiveMonster = FieldMonster & {
+      x: number;
+      y: number;
+      targetCol: number;
+      targetRow: number;
+      wait: number;
+      progress: number;
+      fromX: number;
+      fromY: number;
+      toX: number;
+      toY: number;
+    };
 
-    // スライム画像読み込み
-    const slimeImg = new Image();
-    slimeImg.src = "/slime.png";
+    let monsters: LiveMonster[] = [];
+    let lastRespawnCheck = 0;
+    let toLive: (m: FieldMonster) => LiveMonster = () => {
+      throw new Error("toLive not ready");
+    };
+    let tryStartMonsterMove: (m: LiveMonster) => void = () => {};
+    let updateMonsters: (dt: number) => void = () => {};
+
+    // モンスター画像（種類ごと）
+    const monsterImgs = new Map<number, HTMLImageElement>();
+    for (const def of Object.values(MONSTERS)) {
+      const img = new Image();
+      img.src = def.image;
+      monsterImgs.set(def.id, img);
+    }
     const smithImg = new Image();
     smithImg.src = "/blacksmith.png";
     const armorSmithImg = new Image();
@@ -137,6 +159,98 @@ export default function GameCanvasIso({
       const y = oy + (col + row) * (tileH / 2);
       return { x, y };
     };
+
+    toLive = (m: FieldMonster): LiveMonster => {
+      const p = isoToScreen(m.col, m.row);
+      return {
+        ...m,
+        x: p.x,
+        y: p.y,
+        targetCol: m.col,
+        targetRow: m.row,
+        wait: 0.6 + Math.random() * 1.4,
+        progress: 1,
+        fromX: p.x,
+        fromY: p.y,
+        toX: p.x,
+        toY: p.y,
+      };
+    };
+
+    const occupiedCells = (exceptId?: string) => {
+      const cells: { col: number; row: number }[] = [];
+      for (const m of monsters) {
+        if (m.instanceId === exceptId) continue;
+        cells.push({ col: m.col, row: m.row });
+        if (m.progress < 1) {
+          cells.push({ col: m.targetCol, row: m.targetRow });
+        }
+      }
+      return cells;
+    };
+
+    const dirs4 = [
+      { col: 1, row: 0 },
+      { col: -1, row: 0 },
+      { col: 0, row: 1 },
+      { col: 0, row: -1 },
+    ];
+
+    tryStartMonsterMove = (m: LiveMonster) => {
+      const candidates = dirs4
+        .map((d) => ({ col: m.col + d.col, row: m.row + d.row }))
+        .filter(
+          (c) =>
+            inBounds(c.col, c.row) &&
+            !isBlocked(c.col, c.row) &&
+            !occupiedCells(m.instanceId).some(
+              (o) => o.col === c.col && o.row === c.row
+            )
+        );
+      if (candidates.length === 0) {
+        m.wait = 0.8 + Math.random() * 1.2;
+        return;
+      }
+      const next = candidates[Math.floor(Math.random() * candidates.length)];
+      const from = isoToScreen(m.col, m.row);
+      const to = isoToScreen(next.col, next.row);
+      m.fromX = from.x;
+      m.fromY = from.y;
+      m.toX = to.x;
+      m.toY = to.y;
+      m.targetCol = next.col;
+      m.targetRow = next.row;
+      m.progress = 0;
+    };
+
+    updateMonsters = (dt: number) => {
+      if (isTown) return;
+      const moveDur = 0.55;
+      for (const m of monsters) {
+        if (m.progress < 1) {
+          m.progress = Math.min(1, m.progress + dt / moveDur);
+          const t = m.progress;
+          const e = 1 - (1 - t) * (1 - t);
+          m.x = m.fromX + (m.toX - m.fromX) * e;
+          m.y = m.fromY + (m.toY - m.fromY) * e;
+          if (m.progress >= 1) {
+            m.col = m.targetCol;
+            m.row = m.targetRow;
+            m.x = m.toX;
+            m.y = m.toY;
+            m.wait = 0.9 + Math.random() * 2.2;
+          }
+          continue;
+        }
+        m.wait -= dt;
+        if (m.wait <= 0) tryStartMonsterMove(m);
+      }
+    };
+
+    monsters = isTown
+      ? []
+      : createRandomFieldMonsters(cols, rows, blocked, spawnAvoid).map(toLive);
+
     const screenToIso = (sx: number, sy: number) => {
       const originX = playArea.x + playArea.w / 2 - (currentCssW / 2);
       const originY = playArea.y + 20 - (currentCssH / 2);
@@ -1032,10 +1146,25 @@ export default function GameCanvasIso({
       const cl = clampToBounds(state.current.x, state.current.y);
       state.current.x = cl.x; state.current.y = cl.y;
 
-      // 倒した敵の復活チェック（0.5秒ごと）
+      // 敵の徘徊
+      updateMonsters(dt);
+
+      // 倒した敵の復活チェック（0.5秒ごと）— 復活分だけランダム再配置
       if (ts - lastRespawnCheck > 500) {
         lastRespawnCheck = ts;
-        monsters = isTown ? [] : getAliveFieldMonsters();
+        if (isTown) {
+          monsters = [];
+        } else {
+          const synced = syncAliveFieldMonsters(
+            monsters,
+            cols,
+            rows,
+            blocked,
+            spawnAvoid
+          );
+          const prev = new Map(monsters.map((m) => [m.instanceId, m]));
+          monsters = synced.map((m) => prev.get(m.instanceId) ?? toLive(m));
+        }
       }
 
       // clear（画面固定の背景）
@@ -1155,17 +1284,15 @@ export default function GameCanvasIso({
         );
       }
       
-      // モンスター描画
+      // モンスター描画（徘徊中は補間座標）
       for (const m of monsters) {
-        const p = isoToScreen(m.col, m.row);
+        const img = monsterImgs.get(m.id);
+        if (!img || !img.complete || img.naturalWidth <= 0) continue;
 
-        ctx.drawImage(
-          slimeImg,
-          p.x - 30,
-          p.y - 30,
-          60,
-          48
-        );
+        const isCondor = m.id === 2;
+        const drawW = isCondor ? 88 : 60;
+        const drawH = isCondor ? 72 : 48;
+        ctx.drawImage(img, m.x - drawW / 2, m.y - drawH * 0.72, drawW, drawH);
       }
 
       if (flashCell && flashCell.until > performance.now()) {

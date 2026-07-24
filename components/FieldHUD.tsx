@@ -80,8 +80,6 @@ export default function FieldHUD({
   level = 1,
   hp = 40,
   maxHp = 40,
-  exp = 12,
-  maxExp = 100,
   locationName = "草原フィールド",
   playerName = "ゆうしゃ",
   bgmEnabled = true,
@@ -93,7 +91,7 @@ export default function FieldHUD({
   const [menuOpen, setMenuOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [inventoryOpen, setInventoryOpen] = useState(false);
-  const { money, quests } = useQuestSnap();
+  const { money, quests, exp, maxExp } = useQuestSnap();
 
   useEffect(() => setMounted(true), []);
 
