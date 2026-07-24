@@ -30,15 +30,18 @@ export const QUEST_DEFS: QuestDef[] = [
 const QUEST_KEY = "logres.quests";
 const MONEY_KEY = "logres.money";
 const EXP_KEY = "logres.exp";
+const LEVEL_KEY = "logres.level";
 const DEFAULT_MONEY = 164;
-const DEFAULT_EXP = 12;
-const MAX_EXP = 100;
+const DEFAULT_EXP = 0;
+const DEFAULT_LEVEL = 1;
+const MAX_LEVEL = 99;
 
 type Listener = () => void;
 const listeners = new Set<Listener>();
 
 export type QuestSnapshot = {
   money: number;
+  level: number;
   exp: number;
   maxExp: number;
   quests: QuestProgress[];
@@ -46,18 +49,69 @@ export type QuestSnapshot = {
 
 const SERVER_SNAPSHOT: QuestSnapshot = {
   money: DEFAULT_MONEY,
+  level: DEFAULT_LEVEL,
   exp: DEFAULT_EXP,
-  maxExp: MAX_EXP,
+  maxExp: expToNextLevel(DEFAULT_LEVEL),
   quests: [],
 };
 
 let cachedSnapshot: QuestSnapshot | null = null;
 
+/**
+ * レベル L → L+1 に必要な経験値。
+ * 上がるほど指数的に増える（Lv1:40 → Lv5:約154 → Lv10:約826）。
+ */
+export function expToNextLevel(level: number): number {
+  const lv = Math.max(1, Math.min(MAX_LEVEL, Math.floor(level)));
+  if (lv >= MAX_LEVEL) return 0;
+  return Math.max(1, Math.floor(40 * Math.pow(1.4, lv - 1)));
+}
+
+function clampLevel(n: number): number {
+  return Math.max(1, Math.min(MAX_LEVEL, Math.floor(n)));
+}
+
+/** 余剰経験値でレベルを繰り上げた結果を返す（保存はしない） */
+export function resolveLevelProgress(
+  level: number,
+  exp: number
+): { level: number; exp: number; levelsGained: number } {
+  let lv = clampLevel(level);
+  let xp = Math.max(0, Math.floor(exp));
+  let gained = 0;
+  while (lv < MAX_LEVEL) {
+    const need = expToNextLevel(lv);
+    if (xp < need) break;
+    xp -= need;
+    lv += 1;
+    gained += 1;
+  }
+  if (lv >= MAX_LEVEL) {
+    lv = MAX_LEVEL;
+    xp = 0;
+  }
+  return { level: lv, exp: xp, levelsGained: gained };
+}
+
 function readSnapshot(): QuestSnapshot {
+  if (typeof window === "undefined") return SERVER_SNAPSHOT;
+  const rawLevel = loadLevelRaw();
+  const rawExp = loadExpRaw();
+  const progress = resolveLevelProgress(rawLevel, rawExp);
+  // 旧データで経験値が閾値超えの場合はここで正規化保存
+  if (progress.level !== rawLevel || progress.exp !== rawExp) {
+    try {
+      localStorage.setItem(LEVEL_KEY, String(progress.level));
+      localStorage.setItem(EXP_KEY, String(progress.exp));
+    } catch {
+      /* ignore */
+    }
+  }
   return {
     money: loadMoney(),
-    exp: loadExp(),
-    maxExp: MAX_EXP,
+    level: progress.level,
+    exp: progress.exp,
+    maxExp: Math.max(1, expToNextLevel(progress.level)),
     quests: loadQuestProgress(),
   };
 }
@@ -120,7 +174,19 @@ export function addMoney(delta: number) {
   saveMoney(loadMoney() + delta);
 }
 
-export function loadExp(): number {
+function loadLevelRaw(): number {
+  if (typeof window === "undefined") return DEFAULT_LEVEL;
+  try {
+    const raw = localStorage.getItem(LEVEL_KEY);
+    if (raw == null) return DEFAULT_LEVEL;
+    const n = Number(raw);
+    return Number.isFinite(n) ? clampLevel(n) : DEFAULT_LEVEL;
+  } catch {
+    return DEFAULT_LEVEL;
+  }
+}
+
+function loadExpRaw(): number {
   if (typeof window === "undefined") return DEFAULT_EXP;
   try {
     const raw = localStorage.getItem(EXP_KEY);
@@ -132,13 +198,51 @@ export function loadExp(): number {
   }
 }
 
+export function loadLevel(): number {
+  return resolveLevelProgress(loadLevelRaw(), loadExpRaw()).level;
+}
+
+export function loadExp(): number {
+  return resolveLevelProgress(loadLevelRaw(), loadExpRaw()).exp;
+}
+
+export function saveLevel(level: number) {
+  localStorage.setItem(LEVEL_KEY, String(clampLevel(level)));
+  emit();
+}
+
 export function saveExp(amount: number) {
   localStorage.setItem(EXP_KEY, String(Math.max(0, Math.floor(amount))));
   emit();
 }
 
-export function addExp(delta: number) {
-  saveExp(loadExp() + delta);
+export type ExpGainResult = {
+  levelsGained: number;
+  level: number;
+  exp: number;
+  maxExp: number;
+};
+
+/** 経験値を加算し、足りればレベルアップ。上がった段数を返す */
+export function addExp(delta: number): ExpGainResult {
+  const before = resolveLevelProgress(loadLevelRaw(), loadExpRaw());
+  const after = resolveLevelProgress(
+    before.level,
+    before.exp + Math.max(0, Math.floor(delta))
+  );
+  try {
+    localStorage.setItem(LEVEL_KEY, String(after.level));
+    localStorage.setItem(EXP_KEY, String(after.exp));
+  } catch {
+    /* ignore */
+  }
+  emit();
+  return {
+    levelsGained: after.levelsGained,
+    level: after.level,
+    exp: after.exp,
+    maxExp: Math.max(1, expToNextLevel(after.level)),
+  };
 }
 
 export function getActiveQuests(): QuestProgress[] {

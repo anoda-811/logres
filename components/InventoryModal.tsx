@@ -19,6 +19,11 @@ import {
   type GearDef,
   type GearKind,
 } from "../lib/equipment";
+import {
+  getQuestSnapshot,
+  getServerQuestSnapshot,
+  subscribeQuests,
+} from "../lib/quests";
 import { pushChatMessage } from "../lib/chatStore";
 import styles from "./InventoryModal.module.css";
 
@@ -47,6 +52,14 @@ function useGearSnap() {
   );
 }
 
+function useQuestSnap() {
+  return useSyncExternalStore(
+    subscribeQuests,
+    getQuestSnapshot,
+    getServerQuestSnapshot
+  );
+}
+
 function iconFor(kind: GearKind): string {
   switch (kind) {
     case "weapon":
@@ -72,6 +85,7 @@ export default function InventoryModal({
   onClose,
 }: Props) {
   const { owned, equipped } = useGearSnap();
+  const { level } = useQuestSnap();
   const [selectedSlot, setSelectedSlot] = useState<EquipSlot>("weapon");
   const [bagTab, setBagTab] = useState<BagTab>("all");
 
@@ -201,7 +215,7 @@ export default function InventoryModal({
 
           {/* 中央: 装備 */}
           <section className={styles.equip}>
-            <div className={styles.equipHead}>装備: Lv.1 {playerName}</div>
+            <div className={styles.equipHead}>装備: Lv.{level} {playerName}</div>
 
             <div className={styles.slotBlock}>
               <div className={styles.slotLabel}>武器</div>

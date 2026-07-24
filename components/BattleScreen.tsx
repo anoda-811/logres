@@ -249,6 +249,8 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
     timeMs: number;
     exp: number;
     money: number;
+    levelsGained: number;
+    level: number;
   } | null>(null);
   const [fadeOut, setFadeOut] = useState(false);
   const [bgmEnabled] = useState(() =>
@@ -654,11 +656,22 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
     );
     const expGain = monster.expReward * enemyCount;
     const moneyGain = monster.moneyReward * enemyCount;
-    addExp(expGain);
+    const leveled = addExp(expGain);
     addMoney(moneyGain);
+    if (leveled.levelsGained > 0) {
+      pushBattleLog(
+        `レベルが ${leveled.level} にあがった！`
+      );
+    }
     setTimeout(() => {
       setPlayerMotion("idle");
-      setClearStats({ timeMs, exp: expGain, money: moneyGain });
+      setClearStats({
+        timeMs,
+        exp: expGain,
+        money: moneyGain,
+        levelsGained: leveled.levelsGained,
+        level: leveled.level,
+      });
       setMenuOpenMode(null);
       setDamagePopup(null);
       setResult("win");
@@ -1086,6 +1099,17 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
                 <span className="lr-clear-label">Poro</span>
                 <span className="lr-clear-value">{clearStats.money}</span>
               </div>
+              {clearStats.levelsGained > 0 && (
+                <div
+                  className="lr-clear-row lr-clear-levelup"
+                  style={{ animationDelay: "1.35s" }}
+                >
+                  <span className="lr-clear-label">Level</span>
+                  <span className="lr-clear-value">
+                    UP! → {clearStats.level}
+                  </span>
+                </div>
+              )}
             </div>
             <div
               className={`lr-fadeout${fadeOut ? " on" : ""}`}

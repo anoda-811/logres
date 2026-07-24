@@ -55,11 +55,8 @@ const SIDE_ITEMS: { id: SideId; label: string; title: string; body: string }[] =
 type Props = {
   onReturnTitle: () => void;
   onOpenWorldMap?: () => void;
-  level?: number;
   hp?: number;
   maxHp?: number;
-  exp?: number;
-  maxExp?: number;
   locationName?: string;
   playerName?: string;
   bgmEnabled?: boolean;
@@ -77,7 +74,6 @@ function useQuestSnap() {
 export default function FieldHUD({
   onReturnTitle,
   onOpenWorldMap,
-  level = 1,
   hp = 40,
   maxHp = 40,
   locationName = "草原フィールド",
@@ -91,7 +87,7 @@ export default function FieldHUD({
   const [menuOpen, setMenuOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [inventoryOpen, setInventoryOpen] = useState(false);
-  const { money, quests, exp, maxExp } = useQuestSnap();
+  const { money, quests, level, exp, maxExp } = useQuestSnap();
 
   useEffect(() => setMounted(true), []);
 

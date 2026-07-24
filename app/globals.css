@@ -2859,6 +2859,18 @@ body {
   text-align: right;
   flex: 1 1 auto;
 }
+.lr-clear-levelup .lr-clear-label,
+.lr-clear-levelup .lr-clear-value {
+  color: #fff4c8;
+  -webkit-text-fill-color: #fff4c8;
+  text-shadow:
+    0 0 12px rgba(255, 220, 120, 0.55),
+    0 1px 0 #5a3a12,
+    0 2px 0 #3d280c,
+    1px 2px 0 #3d280c,
+    -1px 1px 0 #2a1a08,
+    0 3px 6px rgba(0, 0, 0, 0.45);
+}
 .lr-clear-line {
   display: none;
 }
