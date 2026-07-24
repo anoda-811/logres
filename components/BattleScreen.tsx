@@ -18,6 +18,8 @@ import {
   pushBattleLog,
   subscribeChat,
 } from "../lib/chatStore";
+import { loadBgmEnabled } from "../lib/settings";
+import FieldBgm from "./FieldBgm";
 
 type Command = {
   id: string;
@@ -80,13 +82,31 @@ const ATTACK_SKILLS: Command[] = [
     effect: "中威力",
   },
   {
+    id: "dark",
+    label: "ダークスラッシュ",
+    cost: 2,
+    power: 24,
+    kind: "attack",
+    desc: "闇のオーラをまとい、上から切り下ろす。",
+    effect: "中威力",
+  },
+  {
     id: "power",
     label: "バルムンク",
     cost: 3,
     power: 32,
     kind: "attack",
-    desc: "SPを3消費する最強攻撃。",
+    desc: "SPを3消費する強攻撃。",
     effect: "高威力",
+  },
+  {
+    id: "jaeger",
+    label: "ランギィールイェーガー",
+    cost: 5,
+    power: 55,
+    kind: "attack",
+    desc: "SPを5消費する必殺技。高く舞い上がり落下斬りを放つ。",
+    effect: "必殺",
   },
 ];
 
@@ -196,6 +216,9 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
     money: number;
   } | null>(null);
   const [fadeOut, setFadeOut] = useState(false);
+  const [bgmEnabled] = useState(() =>
+    typeof window === "undefined" ? true : loadBgmEnabled()
+  );
   /** null=閉 / self=自分強化 / attack=敵への攻撃 */
   const [menuMode, setMenuMode] = useState<"self" | "attack" | null>(null);
   /** 攻撃対象の battleId（複数敵対応） */
@@ -204,7 +227,14 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
   const [shakeEnemy, setShakeEnemy] = useState(false);
   const [shakePlayer, setShakePlayer] = useState(false);
   const [playerMotion, setPlayerMotion] = useState<
-    "idle" | "lunge" | "lunge-swing" | "lunge-smash" | "lunge-spin" | "counter"
+    | "idle"
+    | "lunge"
+    | "lunge-swing"
+    | "lunge-smash"
+    | "lunge-cleave"
+    | "lunge-spin"
+    | "lunge-jaeger"
+    | "counter"
   >("idle");
   /** 同じ技連続でもアニメを再発火させる */
   const [motionNonce, setMotionNonce] = useState(0);
@@ -377,19 +407,61 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
     router.push("/");
   };
 
-  // 勝利: リザルトを明るいまま表示 → 少し待って暗転開始 → 真っ暗 → マップ
+  // 勝利: 戦闘BGM停止 → 勝利曲 → 曲終了で暗転 → マップ
   useEffect(() => {
     if (!clearStats) return;
-    const holdMs = 1800;
-    const fadeMs = 900;
-    const fadeTimer = setTimeout(() => setFadeOut(true), holdMs);
-    const goTimer = setTimeout(goField, holdMs + fadeMs);
+    const fadeMs = 1600;
+    let faded = false;
+    let fadeTimer: ReturnType<typeof setTimeout> | null = null;
+    let goTimer: ReturnType<typeof setTimeout> | null = null;
+    let audio: HTMLAudioElement | null = null;
+
+    const startFade = () => {
+      if (faded) return;
+      faded = true;
+      setFadeOut(true);
+      goTimer = setTimeout(goField, fadeMs);
+    };
+
+    if (!bgmEnabled) {
+      fadeTimer = setTimeout(startFade, 1400);
+      return () => {
+        if (fadeTimer) clearTimeout(fadeTimer);
+        if (goTimer) clearTimeout(goTimer);
+      };
+    }
+
+    audio = new Audio(encodeURI("/bgm/victory.mp3"));
+    audio.loop = false;
+    audio.preload = "auto";
+    audio.volume = 0.62;
+
+    const onEnded = () => startFade();
+    // 再生失敗・duration不明時の保険
+    const safety = setTimeout(startFade, 12000);
+    audio.addEventListener("ended", onEnded);
+
+    const tryPlay = () => {
+      audio!
+        .play()
+        .catch(() => {
+          fadeTimer = setTimeout(startFade, 1400);
+        });
+    };
+    if (audio.readyState >= 2) tryPlay();
+    else audio.addEventListener("canplay", tryPlay, { once: true });
+
     return () => {
-      clearTimeout(fadeTimer);
-      clearTimeout(goTimer);
+      clearTimeout(safety);
+      if (fadeTimer) clearTimeout(fadeTimer);
+      if (goTimer) clearTimeout(goTimer);
+      audio?.removeEventListener("ended", onEnded);
+      audio?.pause();
+      audio?.removeAttribute("src");
+      audio?.load();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clearStats, router]);
+  }, [clearStats, bgmEnabled, router]);
 
   useEffect(() => {
     if (!result || result === "win") return;
@@ -471,11 +543,23 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
           hitMs: 520,
           totalMs: 1120,
         };
+      case "dark":
+        return {
+          motion: "lunge-cleave" as const,
+          hitMs: 720,
+          totalMs: 1350,
+        };
       case "power":
         return {
           motion: "lunge-spin" as const,
           hitMs: 560,
           totalMs: 1250,
+        };
+      case "jaeger":
+        return {
+          motion: "lunge-jaeger" as const,
+          hitMs: 1080,
+          totalMs: 1850,
         };
       default:
         return {
@@ -811,6 +895,12 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
 
   return (
     <div className="lr-battle-shell">
+      <FieldBgm
+        src="/bgm/battle.mp3"
+        playing={!result && !clearStats}
+        enabled={bgmEnabled}
+        volume={1}
+      />
       <div className="lr-battle">
         <div className="lr-bg-art" aria-hidden />
 
@@ -896,6 +986,11 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
             playerMotion !== "idle" ? ` ${playerMotion}` : ""
           }${menuMode === "self" ? " targeted" : ""}`}
           data-motion={playerMotion}
+          style={
+            playerMotion === "lunge-cleave"
+              ? { animation: "player-lunge-cleave 1.35s ease-in-out both" }
+              : undefined
+          }
         >
           {bubble && (
             <div className="speech-bubble battle">{bubble.text}</div>
@@ -1012,16 +1107,21 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
                   {menuSkills
                     .filter((c) => c.id !== "flee")
                     .map((cmd) => {
-                      const disabled = acting || spFloor < cmd.cost;
+                      // HTML disabled はホバー中に SP が足りてもカーソル/クリックが張り付くため
+                      // aria-disabled + クラスで見た目だけ落とす
+                      const locked = acting || spFloor < cmd.cost;
                       return (
                         <li key={cmd.id}>
                           <button
                             type="button"
-                            className={`lr-skill-item sp-cost-${cmd.cost} ${selected === cmd.id ? "selected" : ""} ${disabled ? "disabled" : ""}`}
-                            disabled={disabled}
+                            className={`lr-skill-item sp-cost-${cmd.cost} ${selected === cmd.id ? "selected" : ""} ${locked ? "disabled" : ""}`}
+                            aria-disabled={locked}
                             onMouseEnter={() => setSelected(cmd.id)}
                             onFocus={() => setSelected(cmd.id)}
-                            onClick={() => doCommand(cmd)}
+                            onClick={() => {
+                              if (acting || spFloorRef.current < cmd.cost) return;
+                              doCommand(cmd);
+                            }}
                           >
                             <span className={`cost sp-${cmd.cost}`}>{cmd.cost}</span>
                             <span className="name">{cmd.label}</span>
@@ -1038,11 +1138,14 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
                           <li key={cmd.id}>
                             <button
                               type="button"
-                              className={`lr-skill-item flee sp-cost-${cmd.cost} ${selected === cmd.id ? "selected" : ""}`}
-                              disabled={acting}
+                              className={`lr-skill-item flee sp-cost-${cmd.cost} ${selected === cmd.id ? "selected" : ""}${acting ? " disabled" : ""}`}
+                              aria-disabled={acting}
                               onMouseEnter={() => setSelected(cmd.id)}
                               onFocus={() => setSelected(cmd.id)}
-                              onClick={() => doCommand(cmd)}
+                              onClick={() => {
+                                if (acting) return;
+                                doCommand(cmd);
+                              }}
                             >
                               <span className={`cost sp-${cmd.cost}`}>{cmd.cost}</span>
                               <span className="name">{cmd.label}</span>

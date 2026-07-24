@@ -90,6 +90,7 @@ export default function Page() {
         src={area.bgm}
         playing={started}
         enabled={bgmEnabled}
+        volume={0.05}
       />
       {started ? (
         <>

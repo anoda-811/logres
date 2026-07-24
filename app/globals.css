@@ -1726,6 +1726,63 @@ body {
   z-index: 6;
   animation: player-lunge-smash 1.12s ease-in-out both;
 }
+/* ダークスラッシュ：闇オーラをまとい上から切り下ろす */
+.lr-actor.player.lunge-cleave,
+.lr-actor.player[data-motion="lunge-cleave"] {
+  z-index: 7;
+  animation: player-lunge-cleave 1.35s ease-in-out both !important;
+}
+.lr-actor.player.lunge-cleave .lr-battle-chara,
+.lr-actor.player[data-motion="lunge-cleave"] .lr-battle-chara {
+  animation: player-cleave-blade 1.35s ease-in-out both;
+  filter: drop-shadow(0 0 12px rgba(120, 60, 220, 0.85))
+    drop-shadow(0 0 6px rgba(40, 0, 80, 0.9))
+    drop-shadow(0 12px 12px rgba(0, 0, 0, 0.35));
+}
+.lr-actor.player.lunge-cleave::before,
+.lr-actor.player[data-motion="lunge-cleave"]::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 18%;
+  width: min(150px, 26vw);
+  height: min(150px, 26vw);
+  margin-left: calc(-1 * min(75px, 13vw));
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    rgba(140, 80, 255, 0.55) 0%,
+    rgba(60, 20, 120, 0.35) 40%,
+    transparent 70%
+  );
+  opacity: 0;
+  pointer-events: none;
+  z-index: 4;
+  animation: cleave-aura 1.35s ease-out both;
+}
+.lr-actor.player.lunge-cleave::after,
+.lr-actor.player[data-motion="lunge-cleave"]::after {
+  content: "";
+  position: absolute;
+  left: 48%;
+  top: 8%;
+  width: 5px;
+  height: min(160px, 28vw);
+  margin-left: -2px;
+  border-radius: 999px;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    rgba(200, 160, 255, 0.95) 30%,
+    rgba(90, 40, 180, 0.9) 70%,
+    transparent 100%
+  );
+  opacity: 0;
+  pointer-events: none;
+  z-index: 5;
+  transform-origin: top center;
+  animation: cleave-slash 1.35s ease-out both;
+}
 .lr-actor.player.lunge-spin,
 .lr-actor.player[data-motion="lunge-spin"] {
   z-index: 6;
@@ -1752,6 +1809,62 @@ body {
   pointer-events: none;
   z-index: 5;
   animation: balmung-ring 1.25s ease-out both;
+}
+/* ランギィールイェーガー：接近 → 大跳躍 → 落下斬り */
+.lr-actor.player.lunge-jaeger,
+.lr-actor.player[data-motion="lunge-jaeger"] {
+  z-index: 8;
+  animation: player-lunge-jaeger 1.85s cubic-bezier(0.33, 0.1, 0.25, 1) both;
+}
+.lr-actor.player.lunge-jaeger .lr-battle-chara,
+.lr-actor.player[data-motion="lunge-jaeger"] .lr-battle-chara {
+  animation: player-jaeger-blade 1.85s ease-in-out both;
+  filter: drop-shadow(0 0 10px rgba(255, 80, 140, 0.75))
+    drop-shadow(0 12px 12px rgba(0, 0, 0, 0.35));
+}
+.lr-actor.player.lunge-jaeger::before,
+.lr-actor.player[data-motion="lunge-jaeger"]::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 20%;
+  width: min(160px, 28vw);
+  height: min(160px, 28vw);
+  margin-left: calc(-1 * min(80px, 14vw));
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    rgba(255, 120, 180, 0.55) 0%,
+    rgba(255, 40, 100, 0.2) 45%,
+    transparent 70%
+  );
+  opacity: 0;
+  pointer-events: none;
+  z-index: 4;
+  animation: jaeger-aura 1.85s ease-out both;
+}
+.lr-actor.player.lunge-jaeger::after,
+.lr-actor.player[data-motion="lunge-jaeger"]::after {
+  content: "";
+  position: absolute;
+  left: 40%;
+  top: 35%;
+  width: min(200px, 36vw);
+  height: 4px;
+  margin-left: calc(-1 * min(40px, 8vw));
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 230, 245, 0.95),
+    rgba(255, 60, 120, 0.9),
+    transparent
+  );
+  opacity: 0;
+  pointer-events: none;
+  z-index: 5;
+  transform-origin: center;
+  animation: jaeger-slash-line 1.85s ease-out both;
 }
 .lr-actor.player.counter,
 .lr-actor.player[data-motion="counter"] {
@@ -1833,6 +1946,98 @@ body {
     transform: translate(0, 0) scale(1);
   }
 }
+/* ダークスラッシュ：接近 → 振り上げ → 上から切り下ろし */
+@keyframes player-lunge-cleave {
+  0% {
+    transform: translate(0, 0) scale(1) rotate(0deg);
+  }
+  18% {
+    transform: translate(calc(-1 * min(48vw, 600px)), min(8vh, 60px)) scale(1.05)
+      rotate(-12deg);
+  }
+  /* 目の前で剣を振り上げ */
+  36% {
+    transform: translate(calc(-1 * min(64vw, 800px)), calc(-1 * min(12vh, 95px)))
+      scale(1.08) rotate(-48deg);
+  }
+  48% {
+    transform: translate(calc(-1 * min(66vw, 820px)), calc(-1 * min(16vh, 125px)))
+      scale(1.1) rotate(-56deg);
+  }
+  /* 上から切り下ろし */
+  58% {
+    transform: translate(calc(-1 * min(80vw, 1000px)), min(22vh, 175px)) scale(1.18)
+      rotate(36deg);
+  }
+  70% {
+    transform: translate(calc(-1 * min(74vw, 920px)), min(18vh, 145px)) scale(1.08)
+      rotate(10deg);
+  }
+  100% {
+    transform: translate(0, 0) scale(1) rotate(0deg);
+  }
+}
+@keyframes player-cleave-blade {
+  0%,
+  30% {
+    transform: rotate(0deg);
+  }
+  45% {
+    transform: rotate(-25deg);
+  }
+  58% {
+    transform: rotate(35deg) scale(1.08);
+  }
+  75%,
+  100% {
+    transform: rotate(0deg) scale(1);
+  }
+}
+@keyframes cleave-aura {
+  0% {
+    opacity: 0;
+    transform: scale(0.4);
+  }
+  22% {
+    opacity: 0.75;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.95;
+    transform: scale(1.35);
+  }
+  62% {
+    opacity: 1;
+    transform: scale(1.7);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(2.1);
+  }
+}
+@keyframes cleave-slash {
+  0%,
+  40% {
+    opacity: 0;
+    transform: scaleY(0.2) rotate(-20deg);
+  }
+  50% {
+    opacity: 0.4;
+    transform: scaleY(0.7) rotate(-10deg);
+  }
+  58% {
+    opacity: 1;
+    transform: scaleY(1.3) rotate(15deg);
+  }
+  75% {
+    opacity: 0.35;
+    transform: scaleY(1.1) rotate(25deg);
+  }
+  100% {
+    opacity: 0;
+    transform: scaleY(0.5) rotate(35deg);
+  }
+}
 /* バルムンク：接近しながら回転斬り */
 @keyframes player-lunge-spin-move {
   0% {
@@ -1846,6 +2051,106 @@ body {
   }
   100% {
     transform: translate(0, 0) scale(1);
+  }
+}
+/* ランギィールイェーガー：近づく → 高く跳ぶ → 落下しながら斬る */
+@keyframes player-lunge-jaeger {
+  0% {
+    transform: translate(0, 0) scale(1) rotate(0deg);
+  }
+  /* 接近 */
+  18% {
+    transform: translate(calc(-1 * min(48vw, 580px)), min(8vh, 60px)) scale(1.04)
+      rotate(-8deg);
+  }
+  /* 踏み込み */
+  28% {
+    transform: translate(calc(-1 * min(56vw, 700px)), min(14vh, 100px)) scale(0.96)
+      rotate(-4deg);
+  }
+  /* 大跳躍（画面上へ・敵寄り） */
+  46% {
+    transform: translate(calc(-1 * min(72vw, 900px)), calc(-1 * min(42vh, 340px)))
+      scale(1.12) rotate(12deg);
+  }
+  54% {
+    transform: translate(calc(-1 * min(78vw, 980px)), calc(-1 * min(38vh, 300px)))
+      scale(1.08) rotate(-20deg);
+  }
+  /* 落下斬り着弾（敵に密着） */
+  62% {
+    transform: translate(calc(-1 * min(84vw, 1060px)), min(20vh, 160px)) scale(1.22)
+      rotate(28deg);
+  }
+  70% {
+    transform: translate(calc(-1 * min(80vw, 1020px)), min(22vh, 175px)) scale(1.1)
+      rotate(10deg);
+  }
+  /* 余韻 */
+  82% {
+    transform: translate(calc(-1 * min(58vw, 720px)), min(12vh, 95px)) scale(1.04)
+      rotate(0deg);
+  }
+  100% {
+    transform: translate(0, 0) scale(1) rotate(0deg);
+  }
+}
+@keyframes player-jaeger-blade {
+  0%,
+  40% {
+    transform: rotate(0deg);
+  }
+  52% {
+    transform: rotate(-40deg) scale(1.05);
+  }
+  62% {
+    transform: rotate(50deg) scale(1.12);
+  }
+  75%,
+  100% {
+    transform: rotate(0deg) scale(1);
+  }
+}
+@keyframes jaeger-aura {
+  0%,
+  40% {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+  48% {
+    opacity: 0.85;
+    transform: scale(1.1);
+  }
+  62% {
+    opacity: 1;
+    transform: scale(1.6);
+  }
+  78% {
+    opacity: 0.2;
+    transform: scale(2.2);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(2.6);
+  }
+}
+@keyframes jaeger-slash-line {
+  0%,
+  55% {
+    opacity: 0;
+    transform: rotate(-35deg) scaleX(0.2);
+  }
+  62% {
+    opacity: 1;
+    transform: rotate(25deg) scaleX(1.4);
+  }
+  78% {
+    opacity: 0.35;
+    transform: rotate(40deg) scaleX(1.1);
+  }
+  100% {
+    opacity: 0;
+    transform: rotate(50deg) scaleX(0.6);
   }
 }
 @keyframes player-spin-slash {
@@ -2112,10 +2417,13 @@ body {
   box-shadow: inset 0 0 0 1px rgba(255, 100, 150, 0.35);
 }
 .lr-skill-item.disabled,
-.lr-skill-item:disabled {
+.lr-skill-item[aria-disabled="true"] {
   opacity: 0.45;
   color: rgba(140, 170, 140, 0.85);
   cursor: not-allowed;
+}
+.lr-skill-item:not(.disabled):not([aria-disabled="true"]) {
+  cursor: pointer;
 }
 .lr-skill-item.flee .name,
 .lr-skill-item.flee .cost {
@@ -2221,7 +2529,7 @@ body {
   background: #000;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.9s ease;
+  transition: opacity 1.6s ease;
 }
 .lr-fadeout.on {
   opacity: 1;
