@@ -8,7 +8,6 @@ import {
   useSyncExternalStore,
   type CSSProperties,
 } from "react";
-import ChatPanel from "./ChatPanel";
 import { getMonster, markMonsterDefeated } from "../lib/monsters";
 import { getActiveCharacter } from "../lib/characters";
 import { recordMonsterKill } from "../lib/quests";
@@ -271,10 +270,11 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
   };
 
   return (
-    <div className="lr-battle">
-      <div className="lr-bg-art" aria-hidden />
+    <div className="lr-battle-shell">
+      <div className="lr-battle">
+        <div className="lr-bg-art" aria-hidden />
 
-      <div className="lr-field">
+        <div className="lr-field">
         {/* 敵（左） */}
         <div className={`lr-actor enemy ${shakeEnemy ? "shake" : ""}`}>
           <img
@@ -443,19 +443,6 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
         </div>
       )}
 
-      {/* 下部バー：チャット左 */}
-      <div className="lr-dock">
-        <ChatPanel className="lr-dock-chat" />
-        <div className="lr-dock-portrait">
-          <img src="/chara.png" alt="" draggable={false} />
-        </div>
-        <div className="lr-dock-slots" aria-hidden>
-          {Array.from({ length: 8 }).map((_, i) => (
-            <div key={i} className="slot" />
-          ))}
-        </div>
-      </div>
-
       {result && (
         <div className="lr-result">
           {result === "win" && "勝利！ マップへ…"}
@@ -463,6 +450,7 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
           {result === "lose" && "敗北… マップへ…"}
         </div>
       )}
+      </div>
     </div>
   );
 }
