@@ -100,24 +100,15 @@ export default function WorldSelectScreen({ onStart }: Props) {
 
   return (
     <div className={styles.root}>
-      <div className={styles.sky} />
-      <div className={styles.clouds} aria-hidden />
-      <div className={styles.emblem} aria-hidden />
+      {/* 背景とボタンを同じ縮尺で拡大縮小する固定アスペクトの舞台 */}
+      <div className={styles.stage}>
+        <div className={styles.art} aria-hidden />
 
-      <header className={styles.header}>
-        <span className={styles.headerBar}>ワールドセレクト</span>
-      </header>
+        <h1 className={styles.srOnly}>ワールドセレクト</h1>
+        <p className={styles.srOnly}>ログインするワールドを選択してください</p>
 
-      <p className={styles.lead}>
-        <span className={styles.leadLine} />
-        ログインするワールドを選択してください
-        <span className={styles.leadLine} />
-      </p>
-
-      <div className={styles.body}>
-        <div className={styles.list}>
-          {WORLDS.map((world) => {
-            const locked = world.id !== "1";
+        <div className={styles.worldList}>
+          {WORLDS.filter((w) => w.id === "1").map((world) => {
             const active = selectedId === world.id;
             return (
               <button
@@ -126,123 +117,123 @@ export default function WorldSelectScreen({ onStart }: Props) {
                 className={[
                   styles.worldBtn,
                   active ? styles.worldBtnActive : "",
-                  locked ? styles.worldBtnLocked : "",
                 ]
                   .filter(Boolean)
                   .join(" ")}
-                disabled={locked}
                 onClick={() => setSelectedId(world.id)}
               >
-                {world.name}
-                {locked && <span className={styles.lock}>準備中</span>}
+                <span className={styles.worldBtnFrame} aria-hidden />
+                <span className={styles.worldBtnShine} aria-hidden />
+                <span className={styles.worldBtnInner}>{world.name}</span>
               </button>
             );
           })}
         </div>
+      </div>
 
-        <div
-          className={`${styles.preview} ${selected ? styles.previewOpen : ""}`}
-        >
-          {selected && activeChar ? (
-            <div className={styles.charWrap}>
-              <div className={styles.charFrame}>
-                <img src="/chara.png" alt="キャラクター" draggable={false} />
-              </div>
-              <div className={styles.charShadow} aria-hidden />
+      {selected && activeChar && (
+        <div className={styles.charOverlay}>
+          <button
+            type="button"
+            className={styles.charBackdrop}
+            aria-label="閉じる"
+            onClick={() => setSelectedId(null)}
+          />
+          <div className={styles.charPanel}>
+            <p className={styles.charPanelTitle}>{selected.name}</p>
+            <div className={styles.charFrame}>
+              <img src="/chara.png" alt="キャラクター" draggable={false} />
+            </div>
+            <div className={styles.charShadow} aria-hidden />
 
-              <div className={styles.charSlots}>
-                {characters.map((c) => (
-                  <button
-                    key={c.id}
-                    type="button"
-                    className={`${styles.charSlot} ${c.id === activeChar.id ? styles.charSlotOn : ""}`}
-                    onClick={() => selectChar(c.id)}
-                    title={c.name}
-                  >
-                    {c.name.slice(0, 2)}
-                  </button>
-                ))}
+            <div className={styles.charSlots}>
+              {characters.map((c) => (
                 <button
+                  key={c.id}
                   type="button"
-                  className={styles.charSlotAdd}
-                  onClick={handleAdd}
-                  title="キャラ追加"
+                  className={`${styles.charSlot} ${c.id === activeChar.id ? styles.charSlotOn : ""}`}
+                  onClick={() => selectChar(c.id)}
+                  title={c.name}
                 >
-                  ＋
+                  {c.name.slice(0, 2)}
                 </button>
-              </div>
-
-              {editing ? (
-                <div className={styles.nameEdit}>
-                  <input
-                    className={styles.nameInput}
-                    value={draftName}
-                    maxLength={12}
-                    autoFocus
-                    onChange={(e) => setDraftName(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") saveName();
-                      if (e.key === "Escape") setEditing(false);
-                    }}
-                    placeholder="名前（最大12文字）"
-                  />
-                  <button
-                    type="button"
-                    className={styles.nameSave}
-                    onClick={saveName}
-                  >
-                    保存
-                  </button>
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  className={styles.charNameBtn}
-                  onClick={startEdit}
-                  title="クリックで名前編集"
-                >
-                  {activeChar.name}
-                  <span className={styles.editHint}>編集</span>
-                </button>
-              )}
-
-              <p className={styles.charSub}>{selected.subtitle}</p>
-
-              <div className={styles.charActions}>
-                <button
-                  type="button"
-                  className={styles.subBtn}
-                  onClick={startEdit}
-                >
-                  名前変更
-                </button>
-                <button
-                  type="button"
-                  className={styles.subBtnDanger}
-                  onClick={handleDelete}
-                >
-                  削除
-                </button>
-              </div>
-
+              ))}
               <button
                 type="button"
-                className={styles.startBtn}
-                onClick={() => {
-                  setActiveCharacterId(activeChar.id);
-                  onStart(selected, activeChar);
-                }}
+                className={styles.charSlotAdd}
+                onClick={handleAdd}
+                title="キャラ追加"
               >
-                ゲームスタート
+                ＋
               </button>
             </div>
-          ) : (
-            <p className={styles.previewEmpty}>
-              ワールドを選ぶとキャラが表示されます
-            </p>
-          )}
+
+            {editing ? (
+              <div className={styles.nameEdit}>
+                <input
+                  className={styles.nameInput}
+                  value={draftName}
+                  maxLength={12}
+                  autoFocus
+                  onChange={(e) => setDraftName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") saveName();
+                    if (e.key === "Escape") setEditing(false);
+                  }}
+                  placeholder="名前（最大12文字）"
+                />
+                <button
+                  type="button"
+                  className={styles.nameSave}
+                  onClick={saveName}
+                >
+                  保存
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                className={styles.charNameBtn}
+                onClick={startEdit}
+                title="クリックで名前編集"
+              >
+                {activeChar.name}
+                <span className={styles.editHint}>編集</span>
+              </button>
+            )}
+
+            <p className={styles.charSub}>{selected.subtitle}</p>
+
+            <div className={styles.charActions}>
+              <button
+                type="button"
+                className={styles.subBtn}
+                onClick={startEdit}
+              >
+                名前変更
+              </button>
+              <button
+                type="button"
+                className={styles.subBtnDanger}
+                onClick={handleDelete}
+              >
+                削除
+              </button>
+            </div>
+
+            <button
+              type="button"
+              className={styles.startBtn}
+              onClick={() => {
+                setActiveCharacterId(activeChar.id);
+                onStart(selected, activeChar);
+              }}
+            >
+              ゲームスタート
+            </button>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

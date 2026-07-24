@@ -4,6 +4,22 @@ import { useRouter } from "next/navigation";
 import { createRandomFieldMonsters, syncAliveFieldMonsters, MONSTERS, type FieldMonster } from "../lib/monsters";
 import { getSpeechBubble, pushChatMessage } from "../lib/chatStore";
 import type { AreaId } from "../lib/locations";
+import {
+  FIELD_COLS,
+  FIELD_ROWS,
+  FIELD_TILE_W,
+  buildDirtPath,
+  buildFieldHeights,
+  buildFieldRocks,
+  buildGrassTufts,
+  buildWaterCells,
+  fieldCellFill,
+  hash2,
+} from "../lib/fieldTerrain";
+import {
+  consumeFieldReturnPos,
+  saveFieldReturnPos,
+} from "../lib/settings";
 
 type Props = {
   areaId?: AreaId;
@@ -83,35 +99,65 @@ export default function GameCanvasIso({
     resize();
     // resize 時のカメラ再クランプは clampCamera 定義後に登録
 
-    // --- プレイ設定（既存値をそのまま） ---
-    const playArea = { x: 170, y: 60, w: 1300, h: 1300 }; // xyは始点マスの位置、whは全体のデカさ
-    const cols = 15;
-    const rows = 15;
-    const tileW = Math.floor(playArea.w / cols);
+    // --- プレイ設定（草原は広め＋内部マス、見た目は連続地面） ---
+    const cols = isTown ? 15 : FIELD_COLS;
+    const rows = isTown ? 15 : FIELD_ROWS;
+    const tileW = isTown ? Math.floor(1300 / 15) : FIELD_TILE_W;
     const tileH = Math.floor(tileW / 2);
+    const elevStep = Math.max(10, Math.floor(tileH * 0.62));
+    const playArea = {
+      x: 170,
+      y: 60,
+      w: tileW * cols,
+      h: tileW * cols,
+    };
     const radius = Math.max(12, Math.floor(tileW * 0.18));
 
+    const spawnAvoid = { col: Math.floor(cols / 2), row: Math.floor(rows / 2) };
+
+    // 高さ・道・水・岩（草原のみ）
+    const heights = isTown
+      ? Array.from({ length: rows }, () => Array.from({ length: cols }, () => 0))
+      : buildFieldHeights(cols, rows);
+    const dirtPath = isTown ? [] : buildDirtPath(cols, rows);
+    const pathSet = new Set(dirtPath.map((p) => `${p.col},${p.row}`));
+    const waterCells = isTown
+      ? []
+      : buildWaterCells(cols, rows, pathSet, spawnAvoid);
+    const waterSet = new Set(waterCells.map((p) => `${p.col},${p.row}`));
+    // 水は低地に
+    for (const w of waterCells) {
+      heights[w.row][w.col] = 0;
+    }
+    const grassTufts = isTown
+      ? []
+      : buildGrassTufts(cols, rows, pathSet, 160, waterSet);
+
     // 岩設置
-    const rockBlocked: { col: number; row: number }[] = [
-      { col: 0, row: 0 }, 
-      { col: 2, row: 5 },
-      { col: 3, row: 2 }, 
-      { col: 4, row: 2 }, 
-      { col: 5, row: 2 }, 
-      { col: 6, row: 2 }, { col: 6, row: 3 }, { col: 6, row: 4 }
-    ];
+    const rockBlocked: { col: number; row: number }[] = isTown
+      ? [
+          { col: 0, row: 0 },
+          { col: 2, row: 5 },
+          { col: 3, row: 2 },
+          { col: 4, row: 2 },
+          { col: 5, row: 2 },
+          { col: 6, row: 2 },
+          { col: 6, row: 3 },
+          { col: 6, row: 4 },
+        ]
+      : buildFieldRocks(cols, rows, heights, pathSet, spawnAvoid, waterSet);
     const blocked: { col: number; row: number }[] = isTown
       ? [
           ...rockBlocked,
           { col: WEAPON_SMITH.col, row: WEAPON_SMITH.row },
           { col: ARMOR_SMITH.col, row: ARMOR_SMITH.row },
         ]
-      : rockBlocked;
+      : [...rockBlocked, ...waterCells];
 
     // モンスター設置（位置は isoToScreen 定義後に初期化）
     sessionStorage.removeItem("defeatedMonster");
     sessionStorage.removeItem("defeatedMonsters");
-    const spawnAvoid = { col: Math.floor(cols / 2), row: Math.floor(rows / 2) };
+    // spawnAvoid は上で定義済み
     type LiveMonster = FieldMonster & {
       x: number;
       y: number;
@@ -147,8 +193,10 @@ export default function GameCanvasIso({
 
     const inBounds = (c: number, r: number) => c >= 0 && c < cols && r >= 0 && r < rows;
     const isBlocked = (c: number, r: number) => blocked.some(b => b.col === c && b.row === r);
+    const heightAt = (c: number, r: number) =>
+      inBounds(c, r) ? heights[r][c] : 0;
 
-    // --- 中心原点に合わせた iso <-> screen ---
+    // --- 中心原点に合わせた iso <-> screen（高さ込み） ---
     const isoToScreen = (col: number, row: number) => {
       // 元の playArea 原点（左上基準）をキャンバス中心基準に変換
       const originX = playArea.x + playArea.w / 2;
@@ -156,7 +204,8 @@ export default function GameCanvasIso({
       const ox = originX - (currentCssW / 2);
       const oy = originY - (currentCssH / 2);
       const x = ox + (col - row) * (tileW / 2);
-      const y = oy + (col + row) * (tileH / 2);
+      const y =
+        oy + (col + row) * (tileH / 2) - heightAt(col, row) * elevStep;
       return { x, y };
     };
 
@@ -197,12 +246,14 @@ export default function GameCanvasIso({
     ];
 
     tryStartMonsterMove = (m: LiveMonster) => {
+      const fromH = heightAt(m.col, m.row);
       const candidates = dirs4
         .map((d) => ({ col: m.col + d.col, row: m.row + d.row }))
         .filter(
           (c) =>
             inBounds(c.col, c.row) &&
             !isBlocked(c.col, c.row) &&
+            Math.abs(heightAt(c.col, c.row) - fromH) <= 1 &&
             !occupiedCells(m.instanceId).some(
               (o) => o.col === c.col && o.row === c.row
             )
@@ -251,15 +302,48 @@ export default function GameCanvasIso({
       ? []
       : createRandomFieldMonsters(cols, rows, blocked, spawnAvoid).map(toLive);
 
+    const pointInTileTop = (
+      px: number,
+      py: number,
+      cx: number,
+      cy: number
+    ) => {
+      const dx = Math.abs(px - cx) / (tileW / 2);
+      const dy = Math.abs(py - cy) / (tileH / 2);
+      return dx + dy <= 1.02;
+    };
+
+    // 高さ込みで「見た目のマス」を拾う（段差でのカーソルずれ対策）
     const screenToIso = (sx: number, sy: number) => {
-      const originX = playArea.x + playArea.w / 2 - (currentCssW / 2);
-      const originY = playArea.y + 20 - (currentCssH / 2);
+      const originX = playArea.x + playArea.w / 2 - currentCssW / 2;
+      const originY = playArea.y + 20 - currentCssH / 2;
       const dx = sx - originX;
       const dy = sy - originY;
-      const col = Math.round((dx / (tileW / 2) + dy / (tileH / 2)) / 2);
-      const row = Math.round((dy / (tileH / 2) - dx / (tileW / 2)) / 2);
-      if (!inBounds(col, row)) return { col: -1, row: -1 };
-      return { col, row };
+      // まず高さ0の近似
+      const approxCol = Math.round((dx / (tileW / 2) + dy / (tileH / 2)) / 2);
+      const approxRow = Math.round((dy / (tileH / 2) - dx / (tileW / 2)) / 2);
+
+      let best: { col: number; row: number } | null = null;
+      let bestScore = -Infinity;
+      const radius = 4;
+      for (let r = approxRow - radius; r <= approxRow + radius; r++) {
+        for (let c = approxCol - radius; c <= approxCol + radius; c++) {
+          if (!inBounds(c, r)) continue;
+          const p = isoToScreen(c, r);
+          if (!pointInTileTop(sx, sy, p.x, p.y)) continue;
+          // 手前（奥行きが大きい）かつ高いマスを優先
+          const score = c + r + heightAt(c, r) * 0.6;
+          if (score >= bestScore) {
+            bestScore = score;
+            best = { col: c, row: r };
+          }
+        }
+      }
+      if (best) return best;
+
+      // ヒットなしなら近似を返す（移動開始セル用）
+      if (!inBounds(approxCol, approxRow)) return { col: -1, row: -1 };
+      return { col: approxCol, row: approxRow };
     };
 
     // --- カメラ（スワイプでマップを見る） ---
@@ -276,11 +360,12 @@ export default function GameCanvasIso({
       ];
       const xs = pts.map((p) => p.x);
       const ys = pts.map((p) => p.y);
+      const elevPad = elevStep * 2;
       return {
         minX: Math.min(...xs) - tileW,
         maxX: Math.max(...xs) + tileW,
-        minY: Math.min(...ys) - tileH,
-        maxY: Math.max(...ys) + tileH * 2,
+        minY: Math.min(...ys) - tileH - elevPad,
+        maxY: Math.max(...ys) + tileH * 2 + elevPad,
       };
     };
 
@@ -315,11 +400,12 @@ export default function GameCanvasIso({
       ];
       const xs = pts.map(p => p.x);
       const ys = pts.map(p => p.y);
+      const elevPad = elevStep * 2;
       return {
         minX: Math.min(...xs) - tileW,
         maxX: Math.max(...xs) + tileW,
-        minY: Math.min(...ys) - tileH,
-        maxY: Math.max(...ys) + tileH * 2
+        minY: Math.min(...ys) - tileH - elevPad,
+        maxY: Math.max(...ys) + tileH * 2 + elevPad
       };
     })();
     const clampToBounds = (x: number, y: number) => ({
@@ -332,10 +418,14 @@ export default function GameCanvasIso({
     const neighbors = (n: Node) => {
       const dirs = [{ col: 1, row: 0 }, { col: -1, row: 0 }, { col: 0, row: 1 }, { col: 0, row: -1 }];
       const out: Node[] = [];
+      const fromH = heightAt(n.col, n.row);
       for (const d of dirs) {
         const nc = n.col + d.col;
         const nr = n.row + d.row;
-        if (inBounds(nc, nr) && !isBlocked(nc, nr)) out.push({ col: nc, row: nr });
+        if (!inBounds(nc, nr) || isBlocked(nc, nr)) continue;
+        // 1段までなら昇降可（崖は通れない）
+        if (Math.abs(heightAt(nc, nr) - fromH) > 1) continue;
+        out.push({ col: nc, row: nr });
       }
       return out;
     };
@@ -392,8 +482,20 @@ export default function GameCanvasIso({
       current: { x: 0, y: 0, targetX: 0, targetY: 0, moving: false, speed: 120, dragging: false }
     };
 
-    // 初期位置をマップ中央に（例）
-    const startCenter = isoToScreen(Math.floor(cols / 2), Math.floor(rows / 2));
+    // 初期位置：戦闘後は突入前のマス、それ以外はマップ中央
+    let startCol = Math.floor(cols / 2);
+    let startRow = Math.floor(rows / 2);
+    const resumePos = consumeFieldReturnPos();
+    if (
+      resumePos &&
+      resumePos.areaId === areaId &&
+      inBounds(resumePos.col, resumePos.row) &&
+      !isBlocked(resumePos.col, resumePos.row)
+    ) {
+      startCol = resumePos.col;
+      startRow = resumePos.row;
+    }
+    const startCenter = isoToScreen(startCol, startRow);
     state.current.x = startCenter.x - 3;
     state.current.y = startCenter.y + 8;
     // 最初はキャラが画面中央付近に来るようカメラ合わせ
@@ -401,21 +503,187 @@ export default function GameCanvasIso({
     camY = -state.current.y;
     clampCamera();
 
-    // --- 描画ヘルパー（既存のものをそのまま） ---
+    // --- 描画ヘルパー ---
+    const tileTopPath = (
+      ctx: CanvasRenderingContext2D,
+      x: number,
+      y: number
+    ) => {
+      ctx.beginPath();
+      ctx.moveTo(x, y - tileH / 2);
+      ctx.lineTo(x + tileW / 2, y);
+      ctx.lineTo(x, y + tileH / 2);
+      ctx.lineTo(x - tileW / 2, y);
+      ctx.closePath();
+    };
+
     const drawTile = (ctx: CanvasRenderingContext2D, col: number, row: number, fill: string) => {
       const p = isoToScreen(col, row);
+      const h = heightAt(col, row);
+      const drop = h * elevStep;
+      const isWater = waterSet.has(`${col},${row}`);
+      // わずかに重ねて隙間の黒い線（升目感）を消す
+      const grow = isTown ? 0 : 0.6;
+
+      // 段差の崖面（ログレス風の土の壁）— 水は出さない
+      if (drop > 0.5 && !isWater) {
+        const leftLower = heightAt(col, row + 1) < h;
+        const rightLower = heightAt(col + 1, row) < h;
+        if (leftLower || !inBounds(col, row + 1)) {
+          ctx.beginPath();
+          ctx.moveTo(p.x - tileW / 2, p.y);
+          ctx.lineTo(p.x, p.y + tileH / 2);
+          ctx.lineTo(p.x, p.y + tileH / 2 + drop);
+          ctx.lineTo(p.x - tileW / 2, p.y + drop);
+          ctx.closePath();
+          ctx.fillStyle = "#7a5a32";
+          ctx.fill();
+          ctx.fillStyle = "rgba(30, 16, 6, 0.28)";
+          ctx.fill();
+        }
+        if (rightLower || !inBounds(col + 1, row)) {
+          ctx.beginPath();
+          ctx.moveTo(p.x + tileW / 2, p.y);
+          ctx.lineTo(p.x, p.y + tileH / 2);
+          ctx.lineTo(p.x, p.y + tileH / 2 + drop);
+          ctx.lineTo(p.x + tileW / 2, p.y + drop);
+          ctx.closePath();
+          ctx.fillStyle = "#5c4324";
+          ctx.fill();
+          ctx.fillStyle = "rgba(16, 8, 2, 0.32)";
+          ctx.fill();
+        }
+      }
+
       ctx.beginPath();
-      ctx.moveTo(p.x, p.y - tileH / 2);
-      ctx.lineTo(p.x + tileW / 2, p.y);
-      ctx.lineTo(p.x, p.y + tileH / 2);
-      ctx.lineTo(p.x - tileW / 2, p.y);
+      ctx.moveTo(p.x, p.y - tileH / 2 - grow);
+      ctx.lineTo(p.x + tileW / 2 + grow, p.y);
+      ctx.lineTo(p.x, p.y + tileH / 2 + grow);
+      ctx.lineTo(p.x - tileW / 2 - grow, p.y);
       ctx.closePath();
       ctx.fillStyle = fill;
       ctx.fill();
-      ctx.strokeStyle = "rgba(0,0,0,0.12)";
-      ctx.lineWidth = 1;
-      ctx.stroke();
+
+      // 草地に柔らかい光（北西ハイライト／南東影）
+      if (!isTown && !isWater) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y - tileH / 2 - grow);
+        ctx.lineTo(p.x + tileW / 2 + grow, p.y);
+        ctx.lineTo(p.x, p.y + tileH / 2 + grow);
+        ctx.lineTo(p.x - tileW / 2 - grow, p.y);
+        ctx.closePath();
+        const shade = ctx.createLinearGradient(
+          p.x - tileW * 0.35,
+          p.y - tileH * 0.25,
+          p.x + tileW * 0.35,
+          p.y + tileH * 0.25
+        );
+        shade.addColorStop(0, "rgba(255, 240, 180, 0.1)");
+        shade.addColorStop(0.45, "rgba(255, 255, 255, 0)");
+        shade.addColorStop(1, "rgba(20, 40, 20, 0.12)");
+        ctx.fillStyle = shade;
+        ctx.fill();
+        ctx.restore();
+      }
+
+      // 水のきらめき・岸の影
+      if (isWater) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y - tileH / 2 - grow);
+        ctx.lineTo(p.x + tileW / 2 + grow, p.y);
+        ctx.lineTo(p.x, p.y + tileH / 2 + grow);
+        ctx.lineTo(p.x - tileW / 2 - grow, p.y);
+        ctx.closePath();
+        ctx.fillStyle = "rgba(160, 210, 255, 0.16)";
+        ctx.fill();
+        // ハイライト帯
+        ctx.fillStyle = "rgba(255,255,255,0.16)";
+        ctx.beginPath();
+        ctx.moveTo(p.x - tileW * 0.18, p.y - tileH * 0.08);
+        ctx.lineTo(p.x + tileW * 0.05, p.y - tileH * 0.22);
+        ctx.lineTo(p.x + tileW * 0.12, p.y - tileH * 0.05);
+        ctx.lineTo(p.x - tileW * 0.08, p.y + tileH * 0.02);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+      }
+
+      if (isTown) {
+        ctx.strokeStyle = "rgba(0,0,0,0.12)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
     };
+
+    /** ホバー／指定マス：白い菱形枠＋外光（地面自体に升目は出さない） */
+    const drawCellCursor = (
+      ctx: CanvasRenderingContext2D,
+      col: number,
+      row: number,
+      opts?: { rgb?: string; fillAlpha?: number; pulse?: number }
+    ) => {
+      const p = isoToScreen(col, row);
+      const rgb = opts?.rgb ?? "255,255,255";
+      const fillA = opts?.fillAlpha ?? 0.14;
+      const pulse = opts?.pulse ?? 1;
+      ctx.save();
+      tileTopPath(ctx, p.x, p.y);
+      ctx.fillStyle = `rgba(${rgb},${fillA})`;
+      ctx.fill();
+      ctx.shadowColor = `rgba(${rgb},${0.85 * pulse})`;
+      ctx.shadowBlur = 14 + 4 * pulse;
+      ctx.strokeStyle = `rgba(${rgb},${0.55 + 0.4 * pulse})`;
+      ctx.lineWidth = 2.4;
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = `rgba(${rgb},0.95)`;
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+      ctx.restore();
+    };
+
+    const drawGrassTuft = (
+      ctx: CanvasRenderingContext2D,
+      col: number,
+      row: number,
+      ox: number,
+      oy: number,
+      s: number
+    ) => {
+      const p = isoToScreen(col, row);
+      const x = p.x + ox * tileW;
+      const y = p.y + oy * tileH;
+      const h = 5 * s;
+      ctx.save();
+      ctx.strokeStyle = "rgba(28, 88, 42, 0.62)";
+      ctx.lineWidth = 1.2;
+      ctx.lineCap = "round";
+      for (let i = -1; i <= 1; i++) {
+        ctx.beginPath();
+        ctx.moveTo(x + i * 2.2 * s, y + 2);
+        ctx.quadraticCurveTo(
+          x + i * 2.2 * s + i * 1.2,
+          y - h * 0.4,
+          x + i * 3 * s,
+          y - h
+        );
+        ctx.stroke();
+      }
+      // 小さな白い花 / たまに金の花
+      if (hash2(col, row, 33) > 0.78) {
+        const goldBloom = hash2(col, row, 71) > 0.72;
+        ctx.fillStyle = goldBloom
+          ? "rgba(240, 210, 120, 0.9)"
+          : "rgba(255,255,255,0.85)";
+        ctx.beginPath();
+        ctx.arc(x + 2, y - h * 0.7, 1.2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    };
+
     const drawRock = (ctx: CanvasRenderingContext2D, col: number, row: number) => {
       const p = isoToScreen(col, row);
       const cx = p.x, cy = p.y - tileH * 0.15;
@@ -606,16 +874,15 @@ export default function GameCanvasIso({
 
     const drawPathPreview = (ctx: CanvasRenderingContext2D, pth: Node[]) => {
       ctx.save();
-      ctx.globalAlpha = 0.18;
-      ctx.fillStyle = "#88ccff";
       for (const n of pth) {
         const pos = isoToScreen(n.col, n.row);
+        ctx.fillStyle = "rgba(255,255,255,0.55)";
         ctx.beginPath();
-        ctx.moveTo(pos.x, pos.y - tileH / 2);
-        ctx.lineTo(pos.x + tileW / 2, pos.y);
-        ctx.lineTo(pos.x, pos.y + tileH / 2);
-        ctx.lineTo(pos.x - tileW / 2, pos.y);
-        ctx.closePath();
+        ctx.ellipse(pos.x, pos.y + 4, 5, 2.6, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "rgba(120, 200, 255, 0.35)";
+        ctx.beginPath();
+        ctx.ellipse(pos.x, pos.y + 4, 3.2, 1.6, 0, 0, Math.PI * 2);
         ctx.fill();
       }
       ctx.restore();
@@ -809,18 +1076,32 @@ export default function GameCanvasIso({
 
       battleMonsterId = null;
       battleInstanceId = null;
-      const monsterIndex = pathFound.findIndex((node) =>
-        monsters.some((m) => m.col === node.col && m.row === node.row)
+      // クリック先に敵がいればそれを優先（道中の別敵にすり替わらない）
+      const goalMonster = monsters.find(
+        (m) => m.col === cell.col && m.row === cell.row
       );
-      if (monsterIndex >= 0) {
-        const monster = monsters.find(
-          (m) =>
-            m.col === pathFound[monsterIndex].col &&
-            m.row === pathFound[monsterIndex].row
+      if (goalMonster) {
+        battleMonsterId = goalMonster.id;
+        battleInstanceId = goalMonster.instanceId;
+        const monsterIndex = pathFound.findIndex(
+          (node) =>
+            node.col === goalMonster.col && node.row === goalMonster.row
         );
-        battleMonsterId = monster?.id ?? null;
-        battleInstanceId = monster?.instanceId ?? null;
-        pathFound.splice(monsterIndex);
+        if (monsterIndex >= 0) pathFound.splice(monsterIndex);
+      } else {
+        const monsterIndex = pathFound.findIndex((node) =>
+          monsters.some((m) => m.col === node.col && m.row === node.row)
+        );
+        if (monsterIndex >= 0) {
+          const monster = monsters.find(
+            (m) =>
+              m.col === pathFound[monsterIndex].col &&
+              m.row === pathFound[monsterIndex].row
+          );
+          battleMonsterId = monster?.id ?? null;
+          battleInstanceId = monster?.instanceId ?? null;
+          pathFound.splice(monsterIndex);
+        }
       }
 
       path = pathFound.slice();
@@ -912,24 +1193,27 @@ export default function GameCanvasIso({
       const dx = ev.clientX - downClientX;
       const dy = ev.clientY - downClientY;
       if (!movedEnough && Math.hypot(dx, dy) > PAN_THRESHOLD) {
-        movedEnough = true;
-        panMode = true;
-        longPressActive = false;
-        pendingTap = null;
-        pendingBoardTap = false;
-        pendingSmithTap = false;
-        pendingArmorSmithTap = false;
-        active.col = -1;
-        active.row = -1;
-        longActive.col = -1;
-        longActive.row = -1;
-        if (longPressTimer) {
-          clearTimeout(longPressTimer);
-          longPressTimer = null;
+        // 草原はカメラ追従固定（スワイプパンなし）／城下町のみパン可
+        if (isTown) {
+          movedEnough = true;
+          panMode = true;
+          longPressActive = false;
+          pendingTap = null;
+          pendingBoardTap = false;
+          pendingSmithTap = false;
+          pendingArmorSmithTap = false;
+          active.col = -1;
+          active.row = -1;
+          longActive.col = -1;
+          longActive.row = -1;
+          if (longPressTimer) {
+            clearTimeout(longPressTimer);
+            longPressTimer = null;
+          }
         }
       }
 
-      if (panMode) {
+      if (panMode && isTown) {
         camX = downCamX + dx;
         camY = downCamY + dy;
         clampCamera();
@@ -997,7 +1281,7 @@ export default function GameCanvasIso({
       // ctx.fillStyle = 'red';
       // ctx.fillRect(Math.round(state.current.x)-2, Math.round(state.current.y)-2, 4, 4);
 
-      const scaleFactor = 0.13; // まずは 0.8 や 1 で確認してから上げる
+      const scaleFactor = 0.11 * (tileW / 56); // 少し小さめ
       const imgW = charImg.naturalWidth || (radius / 2);
       const imgH = charImg.naturalHeight || (radius / 2);
       const drawW = Math.max(1, Math.round(imgW * scaleFactor));
@@ -1146,6 +1430,16 @@ export default function GameCanvasIso({
       const cl = clampToBounds(state.current.x, state.current.y);
       state.current.x = cl.x; state.current.y = cl.y;
 
+      // 草原: キャラを常に画面中央に（スムーズ追従）
+      if (!isTown) {
+        const tx = -state.current.x;
+        const ty = -state.current.y;
+        const k = Math.min(1, 10 * dt);
+        camX += (tx - camX) * k;
+        camY += (ty - camY) * k;
+        clampCamera();
+      }
+
       // 敵の徘徊
       updateMonsters(dt);
 
@@ -1169,78 +1463,106 @@ export default function GameCanvasIso({
 
       // clear（画面固定の背景）
       ctx.clearRect(-currentCssW / 2, -currentCssH / 2, currentCssW, currentCssH);
-      ctx.fillStyle = isTown ? "#2a2430" : "#111";
-      ctx.fillRect(-currentCssW / 2, -currentCssH / 2, currentCssW, currentCssH);
+      if (isTown) {
+        ctx.fillStyle = "#2a2430";
+        ctx.fillRect(-currentCssW / 2, -currentCssH / 2, currentCssW, currentCssH);
+      } else {
+        const sky = ctx.createLinearGradient(
+          0,
+          -currentCssH / 2,
+          0,
+          currentCssH / 2
+        );
+        sky.addColorStop(0, "#2a3a48");
+        sky.addColorStop(0.35, "#1e3228");
+        sky.addColorStop(0.72, "#162818");
+        sky.addColorStop(1, "#0e1a12");
+        ctx.fillStyle = sky;
+        ctx.fillRect(-currentCssW / 2, -currentCssH / 2, currentCssW, currentCssH);
+      }
 
       // ワールド（カメラオフセット）
       ctx.save();
       ctx.translate(camX, camY);
 
-      // draw tiles
-      for (let r = 0; r < rows; r++) {
+      // 画面内だけ描画（広いマップ用カリング）
+      const viewPad = tileW * 2.5;
+      const viewMinX = -currentCssW / 2 - camX - viewPad;
+      const viewMaxX = currentCssW / 2 - camX + viewPad;
+      const viewMinY = -currentCssH / 2 - camY - viewPad;
+      const viewMaxY = currentCssH / 2 - camY + viewPad;
+
+      // draw tiles（奥から）
+      for (let sum = 0; sum <= cols + rows - 2; sum++) {
         for (let c = 0; c < cols; c++) {
+          const r = sum - c;
+          if (r < 0 || r >= rows) continue;
+          const p = isoToScreen(c, r);
+          if (
+            p.x < viewMinX ||
+            p.x > viewMaxX ||
+            p.y < viewMinY ||
+            p.y > viewMaxY
+          ) {
+            continue;
+          }
           const base = isTown
             ? (c + r) % 2 === 0
               ? "#c4b49a"
               : "#b39b7a"
-            : (c + r) % 2 === 0
-              ? "#6fbf6f"
-              : "#5fb05f";
+            : fieldCellFill(c, r, pathSet, waterSet);
           drawTile(ctx, c, r, base);
+        }
+      }
+
+      // 草むら装飾
+      if (!isTown) {
+        for (const t of grassTufts) {
+          const p = isoToScreen(t.col, t.row);
+          if (
+            p.x < viewMinX ||
+            p.x > viewMaxX ||
+            p.y < viewMinY ||
+            p.y > viewMaxY
+          ) {
+            continue;
+          }
+          drawGrassTuft(ctx, t.col, t.row, t.ox, t.oy, t.s);
         }
       }
 
       if (path.length > 0) drawPathPreview(ctx, path);
 
-      // hover highlight
+      // hover / 指定マス：白い菱形枠（地面自体にマスは出さない）
       if (hover.col >= 0 && hover.row >= 0 &&
           !(active.col === hover.col && active.row === hover.row) &&
           !(longActive.col === hover.col && longActive.row === hover.row)) {
-        const p = isoToScreen(hover.col, hover.row);
-        ctx.save();
-        ctx.globalAlpha = 0.12;
-        ctx.fillStyle = "#ffffff";
-        ctx.beginPath();
-        ctx.moveTo(p.x, p.y - tileH / 2);
-        ctx.lineTo(p.x + tileW / 2, p.y);
-        ctx.lineTo(p.x, p.y + tileH / 2);
-        ctx.lineTo(p.x - tileW / 2, p.y);
-        ctx.closePath();
-        ctx.fill();
-        ctx.restore();
+        drawCellCursor(ctx, hover.col, hover.row, {
+          rgb: "255,236,190",
+          fillAlpha: 0.1,
+          pulse: 0.85,
+        });
       }
 
-      // active / longActive beams
+      // active / longActive
       if (longActive.col >= 0 && longActive.row >= 0) {
+        const pulse = (Math.sin(ts / 350) + 1) / 2;
         drawBeam(ctx, longActive.col, longActive.row, ts, "120,255,140");
-        const p = isoToScreen(longActive.col, longActive.row);
-        ctx.save();
-        ctx.strokeStyle = `rgba(120,255,140,0.95)`;
-        ctx.lineWidth = 3;
-        ctx.beginPath();
-        ctx.moveTo(p.x, p.y - tileH / 2);
-        ctx.lineTo(p.x + tileW / 2, p.y);
-        ctx.lineTo(p.x, p.y + tileH / 2);
-        ctx.lineTo(p.x - tileW / 2, p.y);
-        ctx.closePath();
-        ctx.stroke();
-        ctx.restore();
+        drawCellCursor(ctx, longActive.col, longActive.row, {
+          rgb: "180,255,200",
+          fillAlpha: 0.12,
+          pulse,
+        });
       }
 
       if (active.col >= 0 && active.row >= 0) {
+        const pulse = (Math.sin(ts / 350) + 1) / 2;
         drawBeam(ctx, active.col, active.row, ts, "120,200,255");
-        const p = isoToScreen(active.col, active.row);
-        ctx.save();
-        ctx.strokeStyle = `rgba(120,200,255,0.95)`;
-        ctx.lineWidth = 3;
-        ctx.beginPath();
-        ctx.moveTo(p.x, p.y - tileH / 2);
-        ctx.lineTo(p.x + tileW / 2, p.y);
-        ctx.lineTo(p.x, p.y + tileH / 2);
-        ctx.lineTo(p.x - tileW / 2, p.y);
-        ctx.closePath();
-        ctx.stroke();
-        ctx.restore();
+        drawCellCursor(ctx, active.col, active.row, {
+          rgb: "180,230,255",
+          fillAlpha: 0.12,
+          pulse,
+        });
       }
 
       // 岩描画
@@ -1289,10 +1611,32 @@ export default function GameCanvasIso({
         const img = monsterImgs.get(m.id);
         if (!img || !img.complete || img.naturalWidth <= 0) continue;
 
+        const def = MONSTERS[m.id];
         const isCondor = m.id === 2;
-        const drawW = isCondor ? 88 : 60;
-        const drawH = isCondor ? 72 : 48;
-        ctx.drawImage(img, m.x - drawW / 2, m.y - drawH * 0.72, drawW, drawH);
+        const scale = tileW / 56;
+        const drawW = (isCondor ? 88 : 60) * scale;
+        const drawH = (isCondor ? 72 : 48) * scale;
+        const topY = m.y - drawH * 0.72;
+        ctx.drawImage(img, m.x - drawW / 2, topY, drawW, drawH);
+
+        // 頭上レベル（Lv n）
+        const lv = def?.level ?? 1;
+        const label = `Lv ${lv}`;
+        const lx = m.x;
+        const ly = topY - 4 * scale;
+        const fontSize = Math.max(11, Math.round(13 * scale));
+        ctx.save();
+        ctx.font = `bold ${fontSize}px "Segoe UI", "Hiragino Sans", sans-serif`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "bottom";
+        ctx.lineJoin = "round";
+        ctx.miterLimit = 2;
+        ctx.lineWidth = Math.max(2.5, 3 * scale);
+        ctx.strokeStyle = "rgba(40, 28, 10, 0.9)";
+        ctx.strokeText(label, lx, ly);
+        ctx.fillStyle = "#f0d878";
+        ctx.fillText(label, lx, ly);
+        ctx.restore();
       }
 
       if (flashCell && flashCell.until > performance.now()) {
@@ -1320,6 +1664,24 @@ export default function GameCanvasIso({
 
       ctx.restore();
 
+      // フィールド：画面縁のヴィネット＋薄い暖色の空気感
+      if (!isTown) {
+        const halfW = currentCssW / 2;
+        const halfH = currentCssH / 2;
+        const vig = ctx.createRadialGradient(0, 0, Math.min(halfW, halfH) * 0.45, 0, 0, Math.max(halfW, halfH) * 1.05);
+        vig.addColorStop(0, "rgba(0,0,0,0)");
+        vig.addColorStop(0.55, "rgba(0,0,0,0)");
+        vig.addColorStop(1, "rgba(6, 10, 8, 0.52)");
+        ctx.fillStyle = vig;
+        ctx.fillRect(-halfW, -halfH, currentCssW, currentCssH);
+
+        const wash = ctx.createLinearGradient(0, -halfH, 0, halfH * 0.2);
+        wash.addColorStop(0, "rgba(255, 220, 150, 0.06)");
+        wash.addColorStop(1, "rgba(255, 220, 150, 0)");
+        ctx.fillStyle = wash;
+        ctx.fillRect(-halfW, -halfH, currentCssW, currentCssH * 0.55);
+      }
+
       if (battleTransition) {
 
       transitionProgress += 0.02;
@@ -1337,11 +1699,29 @@ export default function GameCanvasIso({
       console.log(transitionProgress);
       if (transitionProgress >= 1 && !isTransitioning) {
         isTransitioning = true;
+        // 出発時に確保した instanceId を優先（道中の別敵と取り違えない）
+        let mid = battleMonsterId;
+        let iid = battleInstanceId;
+        if (iid) {
+          const still = monsters.find((m) => m.instanceId === iid);
+          if (still) {
+            mid = still.id;
+            iid = still.instanceId;
+          }
+        }
         setTimeout(() => {
+          const standing = screenToIso(state.current.x, state.current.y);
+          if (standing.col >= 0 && standing.row >= 0) {
+            saveFieldReturnPos({
+              areaId,
+              col: standing.col,
+              row: standing.row,
+            });
+          }
           const q = new URLSearchParams({
-            monsterId: String(battleMonsterId),
+            monsterId: String(mid),
           });
-          if (battleInstanceId) q.set("instanceId", battleInstanceId);
+          if (iid) q.set("instanceId", iid);
           router.push(`/battle?${q.toString()}`);
         }, 500);
       }

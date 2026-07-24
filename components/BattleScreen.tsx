@@ -8,7 +8,7 @@ import {
   useSyncExternalStore,
   type CSSProperties,
 } from "react";
-import { getMonster, markMonsterDefeated } from "../lib/monsters";
+import { getMonster, markMonsterDefeated, resolveBattleMonster } from "../lib/monsters";
 import { getActiveCharacter } from "../lib/characters";
 import { addExp, addMoney, recordMonsterKill } from "../lib/quests";
 import { getTotalAtkBonus, rollCritical } from "../lib/equipment";
@@ -172,12 +172,43 @@ type BattleEnemy = {
   battleId: string;
   instanceId: string | null;
   monsterId: number;
+  name: string;
+  image: string;
+  atk: number;
+  maxHp: number;
+  hp: number;
+  /** 縦配置スロット（0=上寄り） */
+  slot: number;
 };
 
 type Props = {
   monsterId: string | null;
   instanceId: string | null;
 };
+
+/** 出現数: コンドルは常に2、それ以外はたまに2 */
+function rollEnemyCount(monsterId: number): number {
+  if (monsterId === 2) return 2;
+  return Math.random() < 0.42 ? 2 : 1;
+}
+
+function makeEnemyUnits(
+  mon: ReturnType<typeof getMonster>,
+  count: number,
+  instanceId: string | null
+): BattleEnemy[] {
+  return Array.from({ length: count }, (_, i) => ({
+    battleId: `e${i}`,
+    instanceId: i === 0 ? instanceId : null,
+    monsterId: mon.id,
+    name: mon.name,
+    image: mon.image,
+    atk: mon.atk,
+    maxHp: mon.maxHp,
+    hp: mon.maxHp,
+    slot: i,
+  }));
+}
 
 function useBubble() {
   return useSyncExternalStore(
@@ -198,13 +229,17 @@ function formatBattleTime(ms: number) {
 
 export default function BattleScreen({ monsterId, instanceId }: Props) {
   const router = useRouter();
-  const monster = getMonster(monsterId);
+  const monster = resolveBattleMonster(monsterId, instanceId);
   const bubble = useBubble();
   const [playerName] = useState(
     () => getActiveCharacter()?.name ?? "ゆうしゃ"
   );
 
-  const [enemyHp, setEnemyHp] = useState(monster.maxHp);
+  const [enemyUnits, setEnemyUnits] = useState<BattleEnemy[]>(() => {
+    const count = rollEnemyCount(monster.id);
+    return makeEnemyUnits(monster, count, instanceId);
+  });
+  const enemyCount = enemyUnits.length;
   const [playerHp, setPlayerHp] = useState(40);
   const [playerSp, setPlayerSp] = useState(0);
   const [enemyGauge, setEnemyGauge] = useState(0);
@@ -224,8 +259,10 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
   /** 攻撃対象の battleId（複数敵対応） */
   const [targetId, setTargetId] = useState<string | null>(null);
   const [selected, setSelected] = useState<string>("attack");
-  const [shakeEnemy, setShakeEnemy] = useState(false);
+  const [shakeEnemyId, setShakeEnemyId] = useState<string | null>(null);
   const [shakePlayer, setShakePlayer] = useState(false);
+  /** 複数敵時、攻撃モーションの縦狙い（対象スロット） */
+  const [attackAimSlot, setAttackAimSlot] = useState<number | null>(null);
   const [playerMotion, setPlayerMotion] = useState<
     | "idle"
     | "lunge"
@@ -238,8 +275,8 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
   >("idle");
   /** 同じ技連続でもアニメを再発火させる */
   const [motionNonce, setMotionNonce] = useState(0);
-  /** 敵がプレイヤー付近にいる（接近・反撃中） */
-  const [enemyNear, setEnemyNear] = useState(false);
+  /** 接近中の敵 battleId */
+  const [nearEnemyId, setNearEnemyId] = useState<string | null>(null);
   /** 反撃の種類（1=反撃 / 2=復讐） */
   const [counterRank, setCounterRank] = useState(0);
   /** 反撃の残り回数 */
@@ -255,6 +292,8 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
     critical?: boolean;
     /** 反撃時など、敵が近い位置にダメージを出す */
     atNear?: boolean;
+    /** 複数敵時の縦位置 */
+    slot?: number;
   } | null>(null);
   /** 技名バナー（青=味方 / 赤=敵） */
   const [skillBanner, setSkillBanner] = useState<{
@@ -262,13 +301,8 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
     name: string;
   } | null>(null);
 
-  const enemies: BattleEnemy[] = [
-    {
-      battleId: "e0",
-      instanceId,
-      monsterId: monster.id,
-    },
-  ];
+  const aliveEnemies = enemyUnits.filter((e) => e.hp > 0);
+  const enemies = aliveEnemies;
 
   const playerMaxHp = 40;
   const spFloor = Math.min(MAX_SP, Math.floor(playerSp));
@@ -308,7 +342,9 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
   }
 
   const playerHpRef = useRef(playerHp);
-  const enemyHpRef = useRef(enemyHp);
+  const enemyUnitsRef = useRef(enemyUnits);
+  const targetIdRef = useRef(targetId);
+  const nearEnemyIdRef = useRef(nearEnemyId);
   const resultRef = useRef(result);
   const actingRef = useRef(false);
   const enemyBusyRef = useRef(false);
@@ -324,13 +360,15 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
   const spFloorRef = useRef(0);
   const playerSpLiveRef = useRef(0);
   const spFillRef = useRef<HTMLDivElement | null>(null);
-  const enemyGaugeFillRef = useRef<HTMLDivElement | null>(null);
+  const enemyGaugeFillRefs = useRef<(HTMLDivElement | null)[]>([]);
   const displayedSpFloorRef = useRef(0);
   const battleStartedAt = useRef(
     typeof performance !== "undefined" ? performance.now() : Date.now()
   );
   playerHpRef.current = playerHp;
-  enemyHpRef.current = enemyHp;
+  enemyUnitsRef.current = enemyUnits;
+  targetIdRef.current = targetId;
+  nearEnemyIdRef.current = nearEnemyId;
   resultRef.current = result;
   actingRef.current = acting;
   counterRankRef.current = counterRank;
@@ -340,6 +378,9 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
   chargedRef.current = charged;
   spFloorRef.current = spFloor;
 
+  const livingFrom = (units: BattleEnemy[]) => units.filter((e) => e.hp > 0);
+  const anyEnemyAlive = () => livingFrom(enemyUnitsRef.current).length > 0;
+
   const paintSpFill = (s: number) => {
     const frac = s >= MAX_SP ? 1 : s - Math.floor(s);
     if (spFillRef.current) {
@@ -348,8 +389,9 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
   };
 
   const paintEnemyGauge = (g: number) => {
-    if (enemyGaugeFillRef.current) {
-      enemyGaugeFillRef.current.style.width = `${Math.max(0, Math.min(1, g)) * 100}%`;
+    const w = `${Math.max(0, Math.min(1, g)) * 100}%`;
+    for (const el of enemyGaugeFillRefs.current) {
+      if (el) el.style.width = w;
     }
   };
 
@@ -364,9 +406,13 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
   };
 
   useEffect(() => {
-    pushBattleLog(`${monster.name} があらわれた！`);
+    if (enemyCount > 1) {
+      pushBattleLog(`${monster.name} が ${enemyCount} 体あらわれた！`);
+    } else {
+      pushBattleLog(`${monster.name} があらわれた！`);
+    }
     pushBattleLog("敵を選んで攻撃、自分を選んで強化・反撃！");
-  }, [monster.name]);
+  }, [monster.name, enemyCount]);
 
   const setMenuOpenMode = (
     mode: "self" | "attack" | null,
@@ -483,17 +529,24 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
   const flashDamage = (
     side: "enemy" | "player",
     value: number,
-    opts?: { critical?: boolean; atNear?: boolean }
+    opts?: {
+      critical?: boolean;
+      atNear?: boolean;
+      battleId?: string;
+      slot?: number;
+    }
   ) => {
     setDamagePopup({
       side,
       value,
       critical: opts?.critical,
       atNear: opts?.atNear,
+      slot: opts?.slot,
     });
     if (side === "enemy") {
-      setShakeEnemy(true);
-      setTimeout(() => setShakeEnemy(false), 280);
+      const id = opts?.battleId ?? null;
+      setShakeEnemyId(id);
+      setTimeout(() => setShakeEnemyId(null), 280);
     } else {
       setShakePlayer(true);
       setTimeout(() => setShakePlayer(false), 280);
@@ -572,14 +625,15 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
   const lastAttackTimingRef = useRef({ hitMs: LUNGE_HIT_MS, totalMs: LUNGE_TOTAL_MS });
 
   const finishEnemyBusy = () => {
-    setEnemyNear(false);
+    setNearEnemyId(null);
+    nearEnemyIdRef.current = null;
     enemyBusyRef.current = false;
     const pending = pendingAttackRef.current;
     if (
       pending &&
       !resultRef.current &&
       playerHpRef.current > 0 &&
-      enemyHpRef.current > 0
+      anyEnemyAlive()
     ) {
       pendingAttackRef.current = null;
       executeAttack(pending.cmd, pending.targetId);
@@ -598,8 +652,8 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
       (typeof performance !== "undefined" ? performance.now() : Date.now()) -
         battleStartedAt.current
     );
-    const expGain = monster.expReward;
-    const moneyGain = monster.moneyReward;
+    const expGain = monster.expReward * enemyCount;
+    const moneyGain = monster.moneyReward * enemyCount;
     addExp(expGain);
     addMoney(moneyGain);
     setTimeout(() => {
@@ -613,55 +667,86 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
 
   const dealDamageToEnemy = (
     dmg: number,
-    opts: { critical?: boolean; label?: string; atNear?: boolean }
+    opts: {
+      critical?: boolean;
+      label?: string;
+      atNear?: boolean;
+      battleId?: string;
+    }
   ) => {
-    const nextEnemyHp = Math.max(0, enemyHpRef.current - dmg);
+    const units = enemyUnitsRef.current;
+    const living = livingFrom(units);
+    const bid =
+      opts.battleId ??
+      targetIdRef.current ??
+      nearEnemyIdRef.current ??
+      living[0]?.battleId;
+    const target = units.find((e) => e.battleId === bid && e.hp > 0) ?? living[0];
+    if (!target) return { leftHp: 0, allDead: true };
+
+    const nextHp = Math.max(0, target.hp - dmg);
     flashDamage("enemy", dmg, {
       critical: opts.critical,
       atNear: opts.atNear,
+      battleId: target.battleId,
+      slot: target.slot,
     });
     pushBattleLog(
       opts.critical
-        ? `クリティカル！ ${opts.label ?? "攻撃"}！ ${monster.name} に ${dmg} ダメージ`
-        : `${opts.label ?? "攻撃"}！ ${monster.name} に ${dmg} ダメージ`
+        ? `クリティカル！ ${opts.label ?? "攻撃"}！ ${target.name} に ${dmg} ダメージ`
+        : `${opts.label ?? "攻撃"}！ ${target.name} に ${dmg} ダメージ`
     );
-    setEnemyHp(nextEnemyHp);
-    return nextEnemyHp;
+
+    const nextUnits = units.map((e) =>
+      e.battleId === target.battleId ? { ...e, hp: nextHp } : e
+    );
+    enemyUnitsRef.current = nextUnits;
+    setEnemyUnits(nextUnits);
+
+    if (nextHp <= 0 && targetIdRef.current === target.battleId) {
+      const nextAlive = livingFrom(nextUnits);
+      setTargetId(nextAlive[0]?.battleId ?? null);
+    }
+
+    const allDead = livingFrom(nextUnits).length === 0;
+    return { leftHp: nextHp, allDead };
   };
 
   const performEnemyAttack = () => {
+    const living = livingFrom(enemyUnitsRef.current);
     if (
       resultRef.current ||
-      enemyHpRef.current <= 0 ||
+      living.length === 0 ||
       actingRef.current ||
       enemyBusyRef.current
     ) {
       return;
     }
+    const attacker = living[Math.floor(Math.random() * living.length)];
     enemyBusyRef.current = true;
-    setEnemyNear(true);
+    setNearEnemyId(attacker.battleId);
+    nearEnemyIdRef.current = attacker.battleId;
     const enemySkill = pickEnemySkillName();
     showSkillBanner("enemy", enemySkill);
 
     setTimeout(() => {
-      if (resultRef.current || enemyHpRef.current <= 0) {
-        setEnemyNear(false);
+      if (resultRef.current || !anyEnemyAlive()) {
+        setNearEnemyId(null);
         setTimeout(finishEnemyBusy, ENEMY_RETREAT_MS);
         return;
       }
 
-      // 敵が近くまで来た → ダメージ
-      const dmg = monster.atk + Math.floor(Math.random() * 3);
+      const dmg = attacker.atk + Math.floor(Math.random() * 3);
       const nextHp = Math.max(0, playerHpRef.current - dmg);
       flashDamage("player", dmg);
-      pushBattleLog(`${monster.name} の攻撃！ ${dmg} ダメージ`);
+      pushBattleLog(`${attacker.name} の攻撃！ ${dmg} ダメージ`);
       setPlayerHp(nextHp);
 
       if (nextHp <= 0) {
         pushBattleLog("たおれてしまった…");
         setResult("lose");
         pendingAttackRef.current = null;
-        setEnemyNear(false);
+        setNearEnemyId(null);
         setTimeout(finishEnemyBusy, ENEMY_RETREAT_MS);
         return;
       }
@@ -670,39 +755,45 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
       const rank = counterRankRef.current;
 
       if (charges > 0 && rank > 0) {
-        // 近くに留まったままプレイヤーが反撃 → その後敵が戻る
         const counterName = rank >= 2 ? "復讐" : "反撃";
+        const nearSlot =
+          enemyCount > 1
+            ? enemyUnitsRef.current.find((e) => e.battleId === attacker.battleId)
+                ?.slot ?? 0
+            : null;
+        setAttackAimSlot(nearSlot);
         setPlayerMotion("counter");
         setMotionNonce((n) => n + 1);
         showSkillBanner("player", counterName);
         pushBattleLog(`${counterName}が発動！`);
 
         setTimeout(() => {
-          if (resultRef.current || enemyHpRef.current <= 0) return;
+          if (resultRef.current || !anyEnemyAlive()) return;
           const retaliate =
-            (rank >= 2 ? monster.atk * 2 + 6 : monster.atk + 4) +
+            (rank >= 2 ? attacker.atk * 2 + 6 : attacker.atk + 4) +
             Math.floor(Math.random() * 3);
-          const left = dealDamageToEnemy(retaliate, {
+          const { allDead } = dealDamageToEnemy(retaliate, {
             label: counterName,
             atNear: true,
+            battleId: attacker.battleId,
           });
           const remain = Math.max(0, counterChargesRef.current - 1);
           setCounterCharges(remain);
           if (remain <= 0) setCounterRank(0);
-          if (left <= 0) applyKillRewards();
+          if (allDead) applyKillRewards();
         }, COUNTER_HIT_AT_MS);
 
         setTimeout(() => {
           setPlayerMotion("idle");
-          setEnemyNear(false);
+          setAttackAimSlot(null);
+          setNearEnemyId(null);
           setTimeout(finishEnemyBusy, ENEMY_RETREAT_MS);
         }, COUNTER_STRIKE_MS);
         return;
       }
 
-      // 通常：ヒット後すぐ戻る
       setTimeout(() => {
-        setEnemyNear(false);
+        setNearEnemyId(null);
         setTimeout(finishEnemyBusy, ENEMY_RETREAT_MS);
       }, 80);
     }, ENEMY_APPROACH_MS);
@@ -813,7 +904,14 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
   };
 
   const executeAttack = (cmd: Command, attackTargetId: string) => {
-    if (resultRef.current || enemyHpRef.current <= 0 || playerHpRef.current <= 0) {
+    if (resultRef.current || !anyEnemyAlive() || playerHpRef.current <= 0) {
+      return;
+    }
+    const stillAlive = livingFrom(enemyUnitsRef.current).some(
+      (e) => e.battleId === attackTargetId
+    );
+    if (!stillAlive) {
+      pushBattleLog("その敵はもういない！");
       return;
     }
     if (spFloorRef.current < cmd.cost) {
@@ -827,6 +925,10 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
     setActing(true);
     setMenuOpenMode(null);
     setTargetId(attackTargetId);
+    const aimTarget = enemyUnitsRef.current.find(
+      (e) => e.battleId === attackTargetId
+    );
+    setAttackAimSlot(enemyCount > 1 ? (aimTarget?.slot ?? 0) : null);
     commitPlayerSp(playerSpLiveRef.current - cmd.cost);
     // idle を挟まず nonce で再マウントし、アニメを確実に発火
     setPlayerMotion(anim.motion);
@@ -852,15 +954,17 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
 
     setTimeout(() => {
       if (resultRef.current) return;
-      const nextEnemyHp = dealDamageToEnemy(dmg, {
+      const { allDead } = dealDamageToEnemy(dmg, {
         critical,
         label: cmd.label,
+        battleId: attackTargetId,
       });
-      if (nextEnemyHp <= 0) applyKillRewards();
+      if (allDead) applyKillRewards();
     }, anim.hitMs);
 
     setTimeout(() => {
       setPlayerMotion("idle");
+      setAttackAimSlot(null);
       // 倒しても行動ロックは必ず解除
       setTimeout(() => setActing(false), ATTACK_RECOVER_MS);
     }, anim.totalMs);
@@ -905,69 +1009,80 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
         <div className="lr-bg-art" aria-hidden />
 
         <div className="lr-field">
-        {/* 敵（左）— タップで攻撃スキル／勝利時は消える */}
-        {result !== "win" && !clearStats && (
-        <div
-          className={`lr-actor enemy ${enemyNear ? "near" : ""} ${
-            menuMode === "attack" && targetId === enemies[0]?.battleId ? "targeted" : ""
-          }`}
-        >
-          <button
-            type="button"
-            className="lr-char-hit lr-enemy-hit"
-            disabled={!!result || !!clearStats || acting}
-            onClick={(e) => {
-              e.stopPropagation();
-              openAttackMenu(enemies[0].battleId);
-            }}
-            title="攻撃スキル"
-          >
-            <img
-              src={monster.image}
-              alt={monster.name}
-              draggable={false}
-              className={`lr-enemy-img${shakeEnemy ? " shake" : ""}`}
-            />
-          </button>
-          <div className="lr-enemy-meta">
-            <span className="lr-name enemy">{monster.name}</span>
-            <div className="lr-hp-wrap">
-              <div className="lr-hp">
-                <div
-                  className="fill enemy"
-                  style={{ width: `${(enemyHp / monster.maxHp) * 100}%` }}
+        {/* 敵（左）— 複数時は上下に配置／勝利時は消える */}
+        {result !== "win" &&
+          !clearStats &&
+          enemies.map((en, idx) => (
+            <div
+              key={en.battleId}
+              className={`lr-actor enemy ${
+                enemyCount > 1 ? `duo slot-${en.slot}` : "solo"
+              } ${nearEnemyId === en.battleId ? "near" : ""} ${
+                menuMode === "attack" && targetId === en.battleId
+                  ? "targeted"
+                  : ""
+              }`}
+            >
+              <button
+                type="button"
+                className="lr-char-hit lr-enemy-hit"
+                disabled={!!result || !!clearStats || acting}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  openAttackMenu(en.battleId);
+                }}
+                title="攻撃スキル"
+              >
+                <img
+                  src={en.image}
+                  alt={en.name}
+                  draggable={false}
+                  className={`lr-enemy-img${
+                    shakeEnemyId === en.battleId ? " shake" : ""
+                  }`}
                 />
+              </button>
+              <div className="lr-enemy-meta">
+                <span className="lr-name enemy">{en.name}</span>
+                <div className="lr-hp-wrap">
+                  <div className="lr-hp">
+                    <div
+                      className="fill enemy"
+                      style={{ width: `${(en.hp / en.maxHp) * 100}%` }}
+                    />
+                  </div>
+                </div>
+                <div className="lr-gauge-wrap" title="敵の行動ゲージ">
+                  <span className="lr-gauge-label">行動</span>
+                  <div className="lr-gauge enemy">
+                    <div
+                      ref={(el) => {
+                        enemyGaugeFillRefs.current[idx] = el;
+                      }}
+                      className="fill"
+                      style={{ width: `${enemyGauge * 100}%` }}
+                    />
+                  </div>
+                </div>
               </div>
             </div>
-            <div className="lr-gauge-wrap" title="敵の行動ゲージ">
-              <span className="lr-gauge-label">行動</span>
-              <div className="lr-gauge enemy">
-                <div
-                  ref={enemyGaugeFillRef}
-                  className="fill"
-                  style={{ width: `${enemyGauge * 100}%` }}
-                />
-              </div>
-            </div>
-          </div>
-        </div>
-        )}
+          ))}
 
-        {/* 勝利リザルト → 表示後に暗転してマップへ */}
+        {/* 勝利リザルト → ゆっくりフェードイン → 曲終了で暗転 */}
         {clearStats && (
           <>
             <div className="lr-clear">
-              <div className="lr-clear-row">
+              <div className="lr-clear-row" style={{ animationDelay: "0.15s" }}>
                 <span className="lr-clear-label">Time</span>
                 <span className="lr-clear-value">
                   {formatBattleTime(clearStats.timeMs)}
                 </span>
               </div>
-              <div className="lr-clear-row">
+              <div className="lr-clear-row" style={{ animationDelay: "0.55s" }}>
                 <span className="lr-clear-label">Exp</span>
                 <span className="lr-clear-value">{clearStats.exp}</span>
               </div>
-              <div className="lr-clear-row">
+              <div className="lr-clear-row" style={{ animationDelay: "0.95s" }}>
                 <span className="lr-clear-label">Poro</span>
                 <span className="lr-clear-value">{clearStats.money}</span>
               </div>
@@ -984,8 +1099,17 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
           key={`player-motion-${motionNonce}`}
           className={`lr-actor player${
             playerMotion !== "idle" ? ` ${playerMotion}` : ""
-          }${menuMode === "self" ? " targeted" : ""}`}
+          }${menuMode === "self" ? " targeted" : ""}${
+            attackAimSlot === 0
+              ? " aim-slot-0"
+              : attackAimSlot === 1
+                ? " aim-slot-1"
+                : ""
+          }`}
           data-motion={playerMotion}
+          data-aim={
+            attackAimSlot === null ? undefined : String(attackAimSlot)
+          }
           style={
             playerMotion === "lunge-cleave"
               ? { animation: "player-lunge-cleave 1.35s ease-in-out both" }
@@ -1006,10 +1130,12 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
             title="強化・反撃"
           >
             <img
-              src="/chara-battle.png"
+              src={clearStats || result === "win" ? "/chara-victory.png" : "/chara-battle.png"}
               alt="プレイヤー"
               draggable={false}
-              className={`lr-battle-chara${shakePlayer ? " shake" : ""}`}
+              className={`lr-battle-chara${shakePlayer ? " shake" : ""}${
+                clearStats || result === "win" ? " victory" : ""
+              }`}
             />
           </button>
           <div className="lr-player-meta">
@@ -1098,7 +1224,7 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
               <div className="lr-skill-body">
                 <p className="lr-sp-now">
                   {menuMode === "attack"
-                    ? `${monster.name} をこうげき`
+                    ? `${monster.name}${enemyCount > 1 ? ` ×${enemyCount}` : ""} をこうげき`
                     : "じぶんをきょうか"}
                   {" · "}
                   SP {spFloor}/{MAX_SP}
@@ -1185,7 +1311,15 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
         <div
           className={`lr-dmg-wrap ${damagePopup.side === "player" ? "player" : ""} ${
             damagePopup.critical ? "crit" : ""
-          }${damagePopup.atNear ? " near" : ""}`}
+          }${damagePopup.atNear ? " near" : ""}${
+            damagePopup.side === "enemy" && damagePopup.slot === 0 && enemyCount > 1
+              ? " slot-0"
+              : ""
+          }${
+            damagePopup.side === "enemy" && damagePopup.slot === 1 && enemyCount > 1
+              ? " slot-1"
+              : ""
+          }`}
         >
           <span className="lr-dmg-glow">
             <span className="lr-dmg">{damagePopup.value}</span>

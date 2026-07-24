@@ -4,6 +4,8 @@ export type MonsterDef = {
   maxHp: number;
   atk: number;
   image: string;
+  /** フィールド表示レベル */
+  level: number;
   /** 討伐時の経験値 */
   expReward: number;
   /** 討伐時のお金（円） */
@@ -17,6 +19,7 @@ export const MONSTERS: Record<number, MonsterDef> = {
     maxHp: 30,
     atk: 4,
     image: "/slime.png",
+    level: 2,
     expReward: 8,
     moneyReward: 5,
   },
@@ -26,6 +29,7 @@ export const MONSTERS: Record<number, MonsterDef> = {
     maxHp: 55,
     atk: 8,
     image: "/condor.png",
+    level: 3,
     expReward: 18,
     moneyReward: 12,
   },
@@ -49,8 +53,12 @@ export type FieldMonsterSpawn = {
 export const FIELD_MONSTER_SPAWNS: FieldMonsterSpawn[] = [
   { instanceId: "slime-a", id: 1, name: "レッドスライム" },
   { instanceId: "slime-b", id: 1, name: "レッドスライム" },
+  { instanceId: "slime-c", id: 1, name: "レッドスライム" },
+  { instanceId: "slime-d", id: 1, name: "レッドスライム" },
   { instanceId: "condor-a", id: 2, name: "コンドル" },
   { instanceId: "condor-b", id: 2, name: "コンドル" },
+  { instanceId: "condor-c", id: 2, name: "コンドル" },
+  { instanceId: "condor-d", id: 2, name: "コンドル" },
 ];
 
 /** 互換用（固定座標は使わない） */
@@ -67,6 +75,18 @@ export type DefeatUntilMap = Record<string, number>;
 export function getMonster(id: number | string | null): MonsterDef {
   const n = Number(id);
   return MONSTERS[n] ?? MONSTERS[1];
+}
+
+/** instanceId を優先して種類を確定（URLのmonsterId食い違い防止） */
+export function resolveBattleMonster(
+  monsterId: string | null,
+  instanceId: string | null
+): MonsterDef {
+  if (instanceId) {
+    const spawn = FIELD_MONSTER_SPAWNS.find((s) => s.instanceId === instanceId);
+    if (spawn) return getMonster(spawn.id);
+  }
+  return getMonster(monsterId);
 }
 
 export function readDefeatUntilMap(): DefeatUntilMap {
