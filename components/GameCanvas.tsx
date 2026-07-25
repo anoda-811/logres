@@ -489,19 +489,55 @@ export default function GameCanvasIso({
     if (
       resumePos &&
       resumePos.areaId === areaId &&
-      inBounds(resumePos.col, resumePos.row) &&
-      !isBlocked(resumePos.col, resumePos.row)
+      inBounds(resumePos.col, resumePos.row)
     ) {
-      startCol = resumePos.col;
-      startRow = resumePos.row;
+      // ブロックマスでも隣接へ逃がす（戦闘直前マス優先）
+      if (!isBlocked(resumePos.col, resumePos.row)) {
+        startCol = resumePos.col;
+        startRow = resumePos.row;
+      } else {
+        const dirs = [
+          { col: 0, row: 0 },
+          { col: 1, row: 0 },
+          { col: -1, row: 0 },
+          { col: 0, row: 1 },
+          { col: 0, row: -1 },
+        ];
+        for (const d of dirs) {
+          const c = resumePos.col + d.col;
+          const r = resumePos.row + d.row;
+          if (inBounds(c, r) && !isBlocked(c, r)) {
+            startCol = c;
+            startRow = r;
+            break;
+          }
+        }
+      }
     }
     const startCenter = isoToScreen(startCol, startRow);
     state.current.x = startCenter.x - 3;
     state.current.y = startCenter.y + 8;
+    // 論理マス（戦闘復帰用。screenToIso より確実）
+    let playerCol = startCol;
+    let playerRow = startRow;
     // 最初はキャラが画面中央付近に来るようカメラ合わせ
     camX = -state.current.x;
     camY = -state.current.y;
     clampCamera();
+
+    function persistReturnPos() {
+      saveFieldReturnPos({
+        areaId,
+        col: playerCol,
+        row: playerRow,
+      });
+    }
+
+    function startBattleTransition() {
+      if (battleTransition) return;
+      persistReturnPos();
+      battleTransition = true;
+    }
 
     // --- 描画ヘルパー ---
     const tileTopPath = (
@@ -1108,13 +1144,16 @@ export default function GameCanvasIso({
       const next = path.shift();
       if (!next) {
         state.current.moving = false;
-        if (battleMonsterId) battleTransition = true;
+        if (battleMonsterId) startBattleTransition();
         return;
       }
       const center = isoToScreen(next.col, next.row);
       state.current.targetX = center.x;
       state.current.targetY = center.y + 6;
       state.current.moving = true;
+      // 到着予定マスを先に保持（途中で戦闘になっても復帰先が分かる）
+      playerCol = next.col;
+      playerRow = next.row;
       if (asLong) {
         longActive.col = cell.col;
         longActive.row = cell.row;
@@ -1406,14 +1445,16 @@ export default function GameCanvasIso({
               state.current.targetX = center.x;
               state.current.targetY = center.y + 6;
               state.current.moving = true;
+              playerCol = next.col;
+              playerRow = next.row;
             } else {
               state.current.moving = false;
-              if (battleMonsterId) battleTransition = true;
+              if (battleMonsterId) startBattleTransition();
             }
           } else {
             state.current.moving = false;
             if (battleMonsterId) {
-              battleTransition = true;
+              startBattleTransition();
             }
             active.col = -1; active.row = -1;
             longActive.col = -1; longActive.row = -1;
@@ -1710,14 +1751,8 @@ export default function GameCanvasIso({
           }
         }
         setTimeout(() => {
-          const standing = screenToIso(state.current.x, state.current.y);
-          if (standing.col >= 0 && standing.row >= 0) {
-            saveFieldReturnPos({
-              areaId,
-              col: standing.col,
-              row: standing.row,
-            });
-          }
+          // 念のため直前にもう一度保存
+          persistReturnPos();
           const q = new URLSearchParams({
             monsterId: String(mid),
           });

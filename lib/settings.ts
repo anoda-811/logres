@@ -10,6 +10,9 @@ export type FieldReturnPos = {
   row: number;
 };
 
+/** Strict Mode の二重マウントでも消えないよう、一度読んだ位置を保持 */
+let fieldReturnPosMemory: FieldReturnPos | null | undefined = undefined;
+
 export function loadSavedAreaId(): AreaId {
   if (typeof window === "undefined") return "field";
   try {
@@ -57,29 +60,51 @@ export function saveFieldReturnPos(pos: FieldReturnPos) {
   } catch {
     /* ignore */
   }
+  // 次回フィールド入場で必ず session から読み直す
+  fieldReturnPosMemory = undefined;
 }
 
-/** 戦闘後にフィールドへ戻す位置（取得したら消す） */
+/** 戦闘後にフィールドへ戻す位置（Strict Mode 対応でメモリにも残す） */
 export function consumeFieldReturnPos(): FieldReturnPos | null {
   if (typeof window === "undefined") return null;
+  if (fieldReturnPosMemory !== undefined) {
+    return fieldReturnPosMemory;
+  }
   try {
     const raw = sessionStorage.getItem(FIELD_RETURN_POS_KEY);
-    if (!raw) return null;
+    if (!raw) {
+      fieldReturnPosMemory = null;
+      return null;
+    }
     sessionStorage.removeItem(FIELD_RETURN_POS_KEY);
     const parsed = JSON.parse(raw) as Partial<FieldReturnPos>;
     if (
       (parsed.areaId === "field" || parsed.areaId === "town") &&
       typeof parsed.col === "number" &&
-      typeof parsed.row === "number"
+      typeof parsed.row === "number" &&
+      Number.isFinite(parsed.col) &&
+      Number.isFinite(parsed.row)
     ) {
-      return {
+      fieldReturnPosMemory = {
         areaId: parsed.areaId,
-        col: parsed.col,
-        row: parsed.row,
+        col: Math.floor(parsed.col),
+        row: Math.floor(parsed.row),
       };
+      return fieldReturnPosMemory;
     }
   } catch {
     /* ignore */
   }
+  fieldReturnPosMemory = null;
   return null;
+}
+
+/** タイトルへ戻る・新規開始時に破棄 */
+export function clearFieldReturnPos() {
+  fieldReturnPosMemory = undefined;
+  try {
+    sessionStorage.removeItem(FIELD_RETURN_POS_KEY);
+  } catch {
+    /* ignore */
+  }
 }

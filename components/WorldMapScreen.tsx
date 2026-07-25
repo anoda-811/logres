@@ -1,48 +1,32 @@
 "use client";
 
 import { useState } from "react";
-import { createPortal } from "react-dom";
 import { WORLD_AREAS, type AreaId, type WorldArea } from "../lib/locations";
-import styles from "./WorldMapModal.module.css";
+import styles from "./WorldMapScreen.module.css";
 
 type Props = {
-  open: boolean;
   currentAreaId: AreaId;
   onClose: () => void;
   onTravel: (areaId: AreaId) => void;
 };
 
-export default function WorldMapModal({
-  open,
+export default function WorldMapScreen({
   currentAreaId,
   onClose,
   onTravel,
 }: Props) {
   const [selected, setSelected] = useState<WorldArea | null>(null);
 
-  if (!open || typeof document === "undefined") return null;
-
-  const ui = (
+  return (
     <div className={styles.root} role="dialog" aria-label="ワールドマップ">
-      <div className={styles.panel}>
-        <div className={styles.map}>
-          <div className={styles.land} />
-          <div className={styles.mountains} />
-          <div className={styles.forest} />
-          <div className={styles.clouds} />
-
-          <div className={styles.path} aria-hidden>
-            <svg className={styles.pathSvg} viewBox="0 0 100 100" preserveAspectRatio="none">
-              <path
-                d="M 8 70 C 30 60, 45 40, 78 28"
-                fill="none"
-                stroke="rgba(255,255,255,0.85)"
-                strokeWidth="1.8"
-                strokeDasharray="3 3"
-                strokeLinecap="round"
-              />
-            </svg>
-          </div>
+      <div className={styles.stage}>
+        <div className={styles.mapFrame}>
+          <img
+            className={styles.mapArt}
+            src="/ui/world-map.png"
+            alt="ワールドマップ"
+            draggable={false}
+          />
 
           {WORLD_AREAS.map((area) => {
             const here = area.id === currentAreaId;
@@ -60,27 +44,28 @@ export default function WorldMapModal({
                   .join(" ")}
                 style={{ left: `${area.x}%`, top: `${area.y}%` }}
                 onClick={() => setSelected(area)}
+                aria-label={area.name}
               >
-                <span
-                  className={`${styles.icon} ${
-                    area.icon === "castle" ? styles.iconCastle : styles.iconGrass
-                  }`}
-                >
-                  <span className={styles.iconGlyph} aria-hidden />
-                </span>
+                <span className={styles.pin} aria-hidden />
                 <span className={styles.label}>
                   {area.name}
-                  {here ? "（いまここ）" : ""}
+                  {here ? (
+                    <span className={styles.hereTag}>いまここ</span>
+                  ) : null}
                 </span>
               </button>
             );
           })}
         </div>
 
-        <div className={styles.title}>ワールドマップ</div>
-        <button type="button" className={styles.closeBtn} onClick={onClose}>
-          とじる
-        </button>
+        <header className={styles.header}>
+          <h1 className={styles.title}>ワールドマップ</h1>
+          <button type="button" className={styles.closeBtn} onClick={onClose}>
+            とじる
+          </button>
+        </header>
+
+        <p className={styles.hint}>行き先を選んで移動できます</p>
 
         {selected && (
           <div className={styles.confirm}>
@@ -92,12 +77,13 @@ export default function WorldMapModal({
                 className={styles.goBtn}
                 disabled={selected.id === currentAreaId}
                 onClick={() => {
+                  if (selected.id === currentAreaId) return;
                   onTravel(selected.id);
-                  setSelected(null);
-                  onClose();
                 }}
               >
-                {selected.id === currentAreaId ? "すでにここにいます" : "移動する"}
+                {selected.id === currentAreaId
+                  ? "すでにここにいます"
+                  : "移動する"}
               </button>
               <button
                 type="button"
@@ -112,6 +98,4 @@ export default function WorldMapModal({
       </div>
     </div>
   );
-
-  return createPortal(ui, document.body);
 }
