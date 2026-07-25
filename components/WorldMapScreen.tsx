@@ -37,6 +37,7 @@ export default function WorldMapScreen({
                 type="button"
                 className={[
                   styles.node,
+                  area.icon === "grass" ? styles.nodeGrass : styles.nodeCastle,
                   here ? styles.nodeHere : "",
                   isSelected ? styles.nodeSelected : "",
                 ]

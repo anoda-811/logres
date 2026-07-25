@@ -17,9 +17,9 @@ export const WORLD_AREAS: WorldArea[] = [
     name: "草原フィールド",
     desc: "モンスターがいる草原。冒険の出発点。",
     bgm: "/bgm/field.mp3",
-    // 右下の緑の草原アイコン
-    x: 90,
-    y: 86,
+    // 右下の石柱つき緑の草原
+    x: 84,
+    y: 87.5,
     icon: "grass",
   },
   {
@@ -27,9 +27,9 @@ export const WORLD_AREAS: WorldArea[] = [
     name: "城下町",
     desc: "人が集う街。ここで一息つける。",
     bgm: "/bgm/town.mp3",
-    // 草原のひとつ上の街アイコン
-    x: 90.5,
-    y: 75,
+    // 草原のすぐ上の街
+    x: 90.3,
+    y: 77.7,
     icon: "castle",
   },
 ];

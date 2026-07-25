@@ -242,7 +242,6 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
   const enemyCount = enemyUnits.length;
   const [playerHp, setPlayerHp] = useState(40);
   const [playerSp, setPlayerSp] = useState(0);
-  const [enemyGauge, setEnemyGauge] = useState(0);
   const [acting, setActing] = useState(false);
   const [result, setResult] = useState<"win" | "lose" | "flee" | null>(null);
   const [clearStats, setClearStats] = useState<{
@@ -362,7 +361,9 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
   const spFloorRef = useRef(0);
   const playerSpLiveRef = useRef(0);
   const spFillRef = useRef<HTMLDivElement | null>(null);
-  const enemyGaugeFillRefs = useRef<(HTMLDivElement | null)[]>([]);
+  /** 敵ごとの行動ゲージ 0..1 */
+  const enemyGaugesRef = useRef<Record<string, number>>({});
+  const enemyGaugeFillRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const displayedSpFloorRef = useRef(0);
   const battleStartedAt = useRef(
     typeof performance !== "undefined" ? performance.now() : Date.now()
@@ -390,11 +391,25 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
     }
   };
 
-  const paintEnemyGauge = (g: number) => {
-    const w = `${Math.max(0, Math.min(1, g)) * 100}%`;
-    for (const el of enemyGaugeFillRefs.current) {
-      if (el) el.style.width = w;
+  const paintEnemyGauge = (battleId: string, g: number) => {
+    const el = enemyGaugeFillRefs.current[battleId];
+    if (el) el.style.width = `${Math.max(0, Math.min(1, g)) * 100}%`;
+  };
+
+  /** 生存敵のゲージ枠を用意（複数時は開始オフセットをずらす） */
+  const syncEnemyGauges = () => {
+    const living = livingFrom(enemyUnitsRef.current);
+    const livingIds = new Set(living.map((e) => e.battleId));
+    for (const id of Object.keys(enemyGaugesRef.current)) {
+      if (!livingIds.has(id)) delete enemyGaugesRef.current[id];
     }
+    living.forEach((en, i) => {
+      if (enemyGaugesRef.current[en.battleId] === undefined) {
+        enemyGaugesRef.current[en.battleId] =
+          living.length > 1 ? (i * 0.45) % 0.8 : 0;
+        paintEnemyGauge(en.battleId, enemyGaugesRef.current[en.battleId]);
+      }
+    });
   };
 
   const commitPlayerSp = (next: number) => {
@@ -725,7 +740,7 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
     return { leftHp: nextHp, allDead };
   };
 
-  const performEnemyAttack = () => {
+  const performEnemyAttack = (attackerId?: string) => {
     const living = livingFrom(enemyUnitsRef.current);
     if (
       resultRef.current ||
@@ -735,8 +750,15 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
     ) {
       return;
     }
-    const attacker = living[Math.floor(Math.random() * living.length)];
+    const attacker =
+      (attackerId
+        ? living.find((e) => e.battleId === attackerId)
+        : null) ?? living[Math.floor(Math.random() * living.length)];
+    if (!attacker || attacker.hp <= 0) return;
+
     enemyBusyRef.current = true;
+    enemyGaugesRef.current[attacker.battleId] = 0;
+    paintEnemyGauge(attacker.battleId, 0);
     setNearEnemyId(attacker.battleId);
     nearEnemyIdRef.current = attacker.battleId;
     const enemySkill = pickEnemySkillName();
@@ -817,10 +839,9 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
     if (result) return;
     let raf = 0;
     let last = performance.now();
-    let eg = 0;
     playerSpLiveRef.current = playerSp;
     paintSpFill(playerSp);
-    paintEnemyGauge(0);
+    syncEnemyGauges();
 
     const tick = (now: number) => {
       const dt = Math.min(0.05, (now - last) / 1000);
@@ -841,15 +862,34 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
         setPlayerSp(nextSp);
       }
 
-      if (!actingRef.current && !enemyBusyRef.current) {
-        eg += ENEMY_GAUGE_RATE * dt;
-        if (eg >= 1) {
-          eg = 0;
-          paintEnemyGauge(0);
-          setEnemyGauge(0);
-          performEnemyAttack();
-        } else {
-          paintEnemyGauge(eg);
+      if (!actingRef.current) {
+        syncEnemyGauges();
+        const living = livingFrom(enemyUnitsRef.current);
+        let readyId: string | null = null;
+
+        for (const en of living) {
+          const attackingNow =
+            enemyBusyRef.current && nearEnemyIdRef.current === en.battleId;
+          let g = enemyGaugesRef.current[en.battleId] ?? 0;
+
+          // 攻撃モーション中の本人はゲージを貯めない（他は独立して進行）
+          if (!attackingNow) {
+            g = Math.min(1, g + ENEMY_GAUGE_RATE * dt);
+            enemyGaugesRef.current[en.battleId] = g;
+            paintEnemyGauge(en.battleId, g);
+            if (
+              g >= 1 &&
+              !readyId &&
+              !enemyBusyRef.current &&
+              !actingRef.current
+            ) {
+              readyId = en.battleId;
+            }
+          }
+        }
+
+        if (readyId) {
+          performEnemyAttack(readyId);
         }
       }
 
@@ -1025,7 +1065,7 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
         {/* 敵（左）— 複数時は上下に配置／勝利時は消える */}
         {result !== "win" &&
           !clearStats &&
-          enemies.map((en, idx) => (
+          enemies.map((en) => (
             <div
               key={en.battleId}
               className={`lr-actor enemy ${
@@ -1070,10 +1110,12 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
                   <div className="lr-gauge enemy">
                     <div
                       ref={(el) => {
-                        enemyGaugeFillRefs.current[idx] = el;
+                        enemyGaugeFillRefs.current[en.battleId] = el;
                       }}
                       className="fill"
-                      style={{ width: `${enemyGauge * 100}%` }}
+                      style={{
+                        width: `${(enemyGaugesRef.current[en.battleId] ?? 0) * 100}%`,
+                      }}
                     />
                   </div>
                 </div>
