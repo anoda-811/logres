@@ -85,6 +85,16 @@
     0 4px 10px rgba(0, 0, 0, 0.45);
 }
 
+/* 湖 = 青固定 */
+.nodeLake .pin {
+  background: radial-gradient(circle at 35% 30%, #d8f4ff, #4aa8e8 50%, #1a5a9a);
+  border-color: #e8f8ff;
+  box-shadow:
+    0 0 0 2px rgba(10, 40, 70, 0.7),
+    0 0 14px rgba(80, 180, 255, 0.5),
+    0 4px 10px rgba(0, 0, 0, 0.45);
+}
+
 .node:hover .pin,
 .node:focus-visible .pin,
 .nodeSelected .pin {
@@ -109,6 +119,15 @@
     0 4px 12px rgba(0, 0, 0, 0.5);
 }
 
+.nodeLake:hover .pin,
+.nodeLake:focus-visible .pin,
+.nodeLake.nodeSelected .pin {
+  box-shadow:
+    0 0 0 2px rgba(10, 40, 70, 0.7),
+    0 0 20px rgba(120, 210, 255, 0.8),
+    0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
 /* いまここは色を変えずパルスだけ */
 .nodeHere .pin {
   animation: herePulse 1.6s ease-in-out infinite;
@@ -120,6 +139,10 @@
 
 .nodeCastle.nodeHere .pin {
   animation-name: herePulseGold;
+}
+
+.nodeLake.nodeHere .pin {
+  animation-name: herePulseBlue;
 }
 
 @keyframes herePulseGreen {
@@ -150,6 +173,22 @@
     box-shadow:
       0 0 0 2px rgba(60, 40, 10, 0.65),
       0 0 22px rgba(255, 230, 140, 0.9),
+      0 4px 10px rgba(0, 0, 0, 0.45);
+  }
+}
+
+@keyframes herePulseBlue {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 2px rgba(10, 40, 70, 0.7),
+      0 0 12px rgba(80, 180, 255, 0.45),
+      0 4px 10px rgba(0, 0, 0, 0.45);
+  }
+  50% {
+    box-shadow:
+      0 0 0 2px rgba(10, 40, 70, 0.7),
+      0 0 22px rgba(140, 220, 255, 0.9),
       0 4px 10px rgba(0, 0, 0, 0.45);
   }
 }

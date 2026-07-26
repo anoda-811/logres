@@ -1,22 +1,46 @@
 "use client";
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { createRandomFieldMonsters, syncAliveFieldMonsters, MONSTERS, type FieldMonster } from "../lib/monsters";
+import BossBattleConfirm from "./BossBattleConfirm";
+import { createRandomFieldMonsters, syncAliveFieldMonsters, MONSTERS, createSecretBossMonster, type FieldMonster } from "../lib/monsters";
 import { getSpeechBubble, pushChatMessage } from "../lib/chatStore";
 import type { AreaId } from "../lib/locations";
+import {
+  FIELD_WARP_SHOP,
+  SECRET_COLS,
+  SECRET_KELPIE_POS,
+  SECRET_PORTAL,
+  SECRET_ROWS,
+} from "../lib/locations";
 import {
   FIELD_COLS,
   FIELD_ROWS,
   FIELD_TILE_W,
+  FIELD_GROUND_TILE_SRCS,
+  FIELD_WATER_TILE_SRCS,
   buildDirtPath,
   buildFieldHeights,
-  buildFieldRocks,
   buildGrassTufts,
   buildWaterCells,
   fieldCellFill,
-  getFieldGate,
+  getArrivalSpawn,
+  getFieldGates,
   hash2,
+  isFieldArea,
+  mergeGateClearSets,
+  pickFieldGroundTile,
+  pickFieldWaterTile,
+  type FieldGate,
 } from "../lib/fieldTerrain";
+import {
+  buildTownPathSet,
+  buildTownProps,
+  pickTownGroundTile,
+  townBrickFill,
+  townCobbleFill,
+  TOWN_GROUND_TILE_SRCS,
+  type TownProp,
+} from "../lib/townTerrain";
 import {
   consumeFieldReturnPos,
   saveFieldReturnPos,
@@ -27,8 +51,14 @@ type Props = {
   onOpenQuestBoard?: () => void;
   onOpenWeaponShop?: () => void;
   onOpenArmorShop?: () => void;
-  /** フィールド入り口からワールドマップへ */
-  onExitToWorldMap?: () => void;
+  onOpenWarpShop?: () => void;
+  /** フィールド入り口からワールドマップへ。開始できたら true */
+  onExitToWorldMap?: () => boolean | void;
+  /** 青き境界から別エリアへ。開始できたら true */
+  onTravelToArea?: (
+    areaId: AreaId,
+    entry: { col: number; row: number }
+  ) => boolean | void;
 };
 
 /** 城下町のクエストボードマス（スポーン付近） */
@@ -43,23 +73,39 @@ export default function GameCanvasIso({
   onOpenQuestBoard,
   onOpenWeaponShop,
   onOpenArmorShop,
+  onOpenWarpShop,
   onExitToWorldMap,
+  onTravelToArea,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const router = useRouter();
+  const routerRef = useRef(router);
+  routerRef.current = router;
   const isTown = areaId === "town";
+  const isField = isFieldArea(areaId);
+  const isSecret = areaId === "secret";
+  const showWarpShop = areaId === "field";
+  const [bossPrompt, setBossPrompt] = useState<{
+    name: string;
+    monsterId: number;
+    instanceId: string;
+  } | null>(null);
+  const bossConfirmRef = useRef<(() => void) | null>(null);
   const questBoardRef = useRef(onOpenQuestBoard);
   questBoardRef.current = onOpenQuestBoard;
   const weaponShopRef = useRef(onOpenWeaponShop);
   weaponShopRef.current = onOpenWeaponShop;
   const armorShopRef = useRef(onOpenArmorShop);
   armorShopRef.current = onOpenArmorShop;
+  const warpShopRef = useRef(onOpenWarpShop);
+  warpShopRef.current = onOpenWarpShop;
   const exitWorldMapRef = useRef(onExitToWorldMap);
   exitWorldMapRef.current = onExitToWorldMap;
+  const travelAreaRef = useRef(onTravelToArea);
+  travelAreaRef.current = onTravelToArea;
 
   // 本体
   useEffect(() => {
-    console.log("effect start", areaId);
     const canvas = canvasRef.current!;
     const ctx = canvas.getContext("2d")!;
     let raf = 0;
@@ -106,8 +152,8 @@ export default function GameCanvasIso({
     // resize 時のカメラ再クランプは clampCamera 定義後に登録
 
     // --- プレイ設定（草原は広め＋内部マス、見た目は連続地面） ---
-    const cols = isTown ? 15 : FIELD_COLS;
-    const rows = isTown ? 15 : FIELD_ROWS;
+    const cols = isTown ? 15 : isSecret ? SECRET_COLS : FIELD_COLS;
+    const rows = isTown ? 15 : isSecret ? SECRET_ROWS : FIELD_ROWS;
     const tileW = isTown ? Math.floor(1300 / 15) : FIELD_TILE_W;
     const tileH = Math.floor(tileW / 2);
     const elevStep = Math.max(10, Math.floor(tileH * 0.62));
@@ -119,23 +165,43 @@ export default function GameCanvasIso({
     };
     const radius = Math.max(12, Math.floor(tileW * 0.18));
 
-    const fieldGate = isTown ? null : getFieldGate(cols, rows);
-    const gateExitSet = new Set(
-      fieldGate?.exits.map((p) => `${p.col},${p.row}`) ?? []
-    );
-    const spawnAvoid = fieldGate
-      ? { col: fieldGate.spawn.col, row: fieldGate.spawn.row }
+    const fieldGates: FieldGate[] = isField
+      ? getFieldGates(areaId, cols, rows)
+      : [];
+    const gateClearSet = mergeGateClearSets(fieldGates);
+    const gateByExit = new Map<string, FieldGate>();
+    for (const g of fieldGates) {
+      for (const p of g.exits) {
+        gateByExit.set(`${p.col},${p.row}`, g);
+      }
+    }
+    const defaultSpawn =
+      fieldGates.find((g) => g.side === "south")?.spawn ??
+      fieldGates[0]?.spawn ?? {
+        col: Math.floor(cols / 2),
+        row: Math.floor(rows / 2),
+      };
+    const spawnAvoid = isField
+      ? { col: defaultSpawn.col, row: defaultSpawn.row }
       : { col: Math.floor(cols / 2), row: Math.floor(rows / 2) };
 
-    // 高さ・道・水・岩（草原のみ）
+    // 高さ・道・水（草原／湖のみ）
     const heights = isTown
       ? Array.from({ length: rows }, () => Array.from({ length: cols }, () => 0))
-      : buildFieldHeights(cols, rows);
-    const dirtPath = isTown ? [] : buildDirtPath(cols, rows);
+      : buildFieldHeights(cols, rows, fieldGates);
+    const dirtPath =
+      isTown || areaId === "lake" || isSecret
+        ? []
+        : buildDirtPath(cols, rows);
     const pathSet = new Set(dirtPath.map((p) => `${p.col},${p.row}`));
-    const waterCells = isTown
+    const townPathSet = isTown ? buildTownPathSet(cols, rows) : new Set<string>();
+    const townProps: TownProp[] = isTown ? buildTownProps(cols, rows) : [];
+    const waterCells = isTown || isSecret
       ? []
-      : buildWaterCells(cols, rows, pathSet, spawnAvoid);
+      : buildWaterCells(cols, rows, pathSet, spawnAvoid, {
+          style: areaId === "lake" ? "lake" : "normal",
+          gateClear: gateClearSet,
+        });
     const waterSet = new Set(waterCells.map((p) => `${p.col},${p.row}`));
     // 水は低地に
     for (const w of waterCells) {
@@ -143,34 +209,45 @@ export default function GameCanvasIso({
     }
     const grassTufts = isTown
       ? []
-      : buildGrassTufts(cols, rows, pathSet, 160, waterSet);
+      : buildGrassTufts(cols, rows, pathSet, isSecret ? 40 : 160, waterSet);
 
-    // 岩設置
-    const rockBlocked: { col: number; row: number }[] = isTown
+    // 岩はいったん全部なし（見た目が異質なため）
+    const rockBlocked: { col: number; row: number }[] = [];
+    const kelpieFootprint: { col: number; row: number }[] = isSecret
       ? [
-          { col: 0, row: 0 },
-          { col: 2, row: 5 },
-          { col: 3, row: 2 },
-          { col: 4, row: 2 },
-          { col: 5, row: 2 },
-          { col: 6, row: 2 },
-          { col: 6, row: 3 },
-          { col: 6, row: 4 },
+          { col: SECRET_KELPIE_POS.col, row: SECRET_KELPIE_POS.row },
+          { col: SECRET_KELPIE_POS.col - 1, row: SECRET_KELPIE_POS.row },
+          { col: SECRET_KELPIE_POS.col, row: SECRET_KELPIE_POS.row + 1 },
+          { col: SECRET_KELPIE_POS.col - 1, row: SECRET_KELPIE_POS.row + 1 },
         ]
-      : buildFieldRocks(cols, rows, heights, pathSet, spawnAvoid, waterSet);
+      : [];
     const blocked: { col: number; row: number }[] = isTown
       ? [
           ...rockBlocked,
           { col: WEAPON_SMITH.col, row: WEAPON_SMITH.row },
           { col: ARMOR_SMITH.col, row: ARMOR_SMITH.row },
         ]
-      : [...rockBlocked, ...waterCells];
+      : showWarpShop
+        ? [
+            ...rockBlocked,
+            ...waterCells,
+            { col: FIELD_WARP_SHOP.col, row: FIELD_WARP_SHOP.row },
+          ]
+        : isSecret
+          ? [
+              ...rockBlocked,
+              ...kelpieFootprint,
+              { col: SECRET_PORTAL.col, row: SECRET_PORTAL.row },
+              { col: SECRET_PORTAL.col - 1, row: SECRET_PORTAL.row },
+              { col: SECRET_PORTAL.col + 1, row: SECRET_PORTAL.row },
+            ]
+          : [...rockBlocked, ...waterCells];
 
     // 入り口帯にはモンスターを出さない（通行は可）
-    const monsterBlocked: { col: number; row: number }[] = fieldGate
+    const monsterBlocked: { col: number; row: number }[] = isField
       ? [
           ...blocked,
-          ...[...fieldGate.clearSet].map((k) => {
+          ...[...gateClearSet].map((k) => {
             const [c, r] = k.split(",").map(Number);
             return { col: c, row: r };
           }),
@@ -209,10 +286,37 @@ export default function GameCanvasIso({
       img.src = def.image;
       monsterImgs.set(def.id, img);
     }
+    // 草原タイル（5種）＋水タイル
+    const fieldTileImgs = FIELD_GROUND_TILE_SRCS.map((src) => {
+      const img = new Image();
+      img.src = src;
+      return img;
+    });
+    let fieldTilesReady = 0;
+    for (const img of fieldTileImgs) {
+      if (img.complete && img.naturalWidth > 0) fieldTilesReady += 1;
+      else {
+        img.onload = () => {
+          fieldTilesReady += 1;
+        };
+      }
+    }
+    const waterTileImgs = FIELD_WATER_TILE_SRCS.map((src) => {
+      const img = new Image();
+      img.src = src;
+      return img;
+    });
+    const townTileImgs = TOWN_GROUND_TILE_SRCS.map((src) => {
+      const img = new Image();
+      img.src = src;
+      return img;
+    });
     const smithImg = new Image();
     smithImg.src = "/blacksmith.png";
     const armorSmithImg = new Image();
     armorSmithImg.src = "/armorsmith.png";
+    const warpKeeperImg = new Image();
+    warpKeeperImg.src = "/warp-keeper.png";
 
     const inBounds = (c: number, r: number) => c >= 0 && c < cols && r >= 0 && r < rows;
     const isBlocked = (c: number, r: number) => blocked.some(b => b.col === c && b.row === r);
@@ -269,6 +373,8 @@ export default function GameCanvasIso({
     ];
 
     tryStartMonsterMove = (m: LiveMonster) => {
+      const def = MONSTERS[m.id];
+      if (def?.immobile) return;
       const fromH = heightAt(m.col, m.row);
       const candidates = dirs4
         .map((d) => ({ col: m.col + d.col, row: m.row + d.row }))
@@ -323,7 +429,11 @@ export default function GameCanvasIso({
 
     monsters = isTown
       ? []
-      : createRandomFieldMonsters(cols, rows, monsterBlocked, spawnAvoid).map(toLive);
+      : isSecret
+        ? createSecretBossMonster(SECRET_KELPIE_POS).map(toLive)
+        : createRandomFieldMonsters(cols, rows, monsterBlocked, spawnAvoid).map(
+            toLive
+          );
 
     const pointInTileTop = (
       px: number,
@@ -536,9 +646,15 @@ export default function GameCanvasIso({
           }
         }
       }
-    } else if (!isTown && fieldGate) {
-      startCol = fieldGate.spawn.col;
-      startRow = fieldGate.spawn.row;
+    } else if (isField && fieldGates.length > 0) {
+      startCol = defaultSpawn.col;
+      startRow = defaultSpawn.row;
+    }
+    // 出口マス上だと復帰直後に再退場・操作ロックしやすいので内側へ
+    if (isField && gateByExit.has(`${startCol},${startRow}`)) {
+      const g = gateByExit.get(`${startCol},${startRow}`)!;
+      startCol = g.spawn.col;
+      startRow = g.spawn.row;
     }
     const startCenter = isoToScreen(startCol, startRow);
     state.current.x = startCenter.x - 3;
@@ -546,6 +662,8 @@ export default function GameCanvasIso({
     // 論理マス（戦闘復帰用。screenToIso より確実）
     let playerCol = startCol;
     let playerRow = startRow;
+    // 復帰直後はゲート判定を少し無効化（誤ってワールドマップ遷移で固まる対策）
+    const gateGraceUntil = performance.now() + 750;
     // 最初はキャラが画面中央付近に来るようカメラ合わせ
     camX = -state.current.x;
     camY = -state.current.y;
@@ -565,31 +683,120 @@ export default function GameCanvasIso({
       battleTransition = true;
     }
 
-    let worldMapExitStarted = false;
-    function startWorldMapExit() {
-      if (worldMapExitStarted || isTown || !exitWorldMapRef.current) return;
-      worldMapExitStarted = true;
+    function askBossFight(m: {
+      name: string;
+      id: number;
+      instanceId: string;
+    }) {
+      setBossPrompt({
+        name: m.name,
+        monsterId: m.id,
+        instanceId: m.instanceId,
+      });
+      bossConfirmRef.current = () => {
+        battleMonsterId = m.id;
+        battleInstanceId = m.instanceId;
+        startBattleTransition();
+      };
+    }
+
+    function beginBattleOrAsk(monsterId: number, instanceId: string | null) {
+      const def = MONSTERS[monsterId];
+      if (def?.boss && instanceId) {
+        askBossFight({
+          name: def.name,
+          id: monsterId,
+          instanceId,
+        });
+        return;
+      }
+      battleMonsterId = monsterId;
+      battleInstanceId = instanceId;
+      startBattleTransition();
+    }
+
+    function findBossAtCell(col: number, row: number) {
+      return monsters.find((m) => {
+        const def = MONSTERS[m.id];
+        if (!def?.boss) return false;
+        return (
+          Math.abs(col - m.col) <= 1 && Math.abs(row - m.row) <= 1
+        );
+      });
+    }
+
+    function pickBossApproachCell(boss: { col: number; row: number }) {
+      const cands: { col: number; row: number }[] = [];
+      for (let dc = -2; dc <= 2; dc++) {
+        for (let dr = -2; dr <= 3; dr++) {
+          if (Math.abs(dc) + Math.abs(dr) < 2) continue;
+          const c = boss.col + dc;
+          const r = boss.row + dr;
+          if (!inBounds(c, r) || isBlocked(c, r)) continue;
+          if (findBossAtCell(c, r)) continue;
+          cands.push({ col: c, row: r });
+        }
+      }
+      if (cands.length === 0) return null;
+      cands.sort(
+        (a, b) =>
+          Math.abs(a.col - playerCol) +
+          Math.abs(a.row - playerRow) -
+          (Math.abs(b.col - playerCol) + Math.abs(b.row - playerRow))
+      );
+      return cands[0];
+    }
+
+    function isNearBoss(boss: { col: number; row: number }) {
+      return (
+        Math.max(
+          Math.abs(playerCol - boss.col),
+          Math.abs(playerRow - boss.row)
+        ) <= 2
+      );
+    }
+
+    let areaExitStarted = false;
+    function startWorldMapExit(gate: FieldGate) {
+      if (areaExitStarted || !isField || !exitWorldMapRef.current) return;
+      if (performance.now() < gateGraceUntil) return;
+      saveFieldReturnPos({
+        areaId,
+        col: gate.spawn.col,
+        row: gate.spawn.row,
+      });
+      const startedOk = exitWorldMapRef.current();
+      if (startedOk === false) return;
+      areaExitStarted = true;
       state.current.moving = false;
       path = [];
-      // 戻ってきたとき入り口内側に出る
-      if (fieldGate) {
-        saveFieldReturnPos({
-          areaId,
-          col: fieldGate.spawn.col,
-          row: fieldGate.spawn.row,
-        });
-      } else {
-        persistReturnPos();
+    }
+
+    function startAreaTravel(gate: FieldGate) {
+      if (areaExitStarted || !isField || !travelAreaRef.current) return;
+      if (performance.now() < gateGraceUntil) return;
+      if (gate.destination === "worldmap" || gate.destination === "town") {
+        return;
       }
-      exitWorldMapRef.current();
+      const entry = getArrivalSpawn(gate.destination, gate.side);
+      const startedOk = travelAreaRef.current(gate.destination, entry);
+      if (startedOk === false) return;
+      areaExitStarted = true;
+      state.current.moving = false;
+      path = [];
     }
 
     function checkGateExit(col: number, row: number) {
-      if (!isTown && gateExitSet.has(`${col},${row}`)) {
-        startWorldMapExit();
-        return true;
+      if (performance.now() < gateGraceUntil) return false;
+      if (!isField) return false;
+      const gate = gateByExit.get(`${col},${row}`);
+      if (!gate) return false;
+      if (gate.destination === "worldmap") {
+        startWorldMapExit(gate);
+        return areaExitStarted;
       }
-      return false;
+      startAreaTravel(gate);
+      return areaExitStarted;
     }
 
     // --- 描画ヘルパー ---
@@ -656,8 +863,40 @@ export default function GameCanvasIso({
       ctx.lineTo(p.x, p.y + tileH / 2 + grow);
       ctx.lineTo(p.x - tileW / 2 - grow, p.y);
       ctx.closePath();
-      ctx.fillStyle = fill;
-      ctx.fill();
+
+      const tileIdx = isTown
+        ? pickTownGroundTile(col, row, townPathSet, cols, rows)
+        : !isWater
+          ? pickFieldGroundTile(col, row, pathSet, waterSet, {
+              lakeShore: areaId === "lake" || isSecret,
+            })
+          : -1;
+      const tilePool = isTown ? townTileImgs : fieldTileImgs;
+      const tileImg =
+        tileIdx >= 0 && tileIdx < tilePool.length ? tilePool[tileIdx] : null;
+      const usePhotoTile =
+        !!tileImg && tileImg.complete && tileImg.naturalWidth > 0;
+
+      if (usePhotoTile && tileImg) {
+        ctx.save();
+        ctx.clip();
+        // 菱形を覆うように配置＋セルごとにわずかにオフセットして継ぎ目を目立たなく
+        const ox = (hash2(col, row, 11) - 0.5) * tileW * 0.08;
+        const oy = (hash2(col, row, 22) - 0.5) * tileH * 0.08;
+        const dw = tileW * 1.22;
+        const dh = tileH * 1.35;
+        ctx.drawImage(
+          tileImg,
+          p.x - dw / 2 + ox,
+          p.y - dh / 2 + oy,
+          dw,
+          dh
+        );
+        ctx.restore();
+      } else {
+        ctx.fillStyle = fill;
+        ctx.fill();
+      }
 
       // 草地に柔らかい光（北西ハイライト／南東影）
       if (!isTown && !isWater) {
@@ -674,15 +913,111 @@ export default function GameCanvasIso({
           p.x + tileW * 0.35,
           p.y + tileH * 0.25
         );
-        shade.addColorStop(0, "rgba(255, 240, 180, 0.1)");
-        shade.addColorStop(0.45, "rgba(255, 255, 255, 0)");
-        shade.addColorStop(1, "rgba(20, 40, 20, 0.12)");
+        if (usePhotoTile) {
+          shade.addColorStop(0, "rgba(255, 240, 180, 0.05)");
+          shade.addColorStop(0.5, "rgba(255, 255, 255, 0)");
+          shade.addColorStop(1, "rgba(20, 40, 20, 0.08)");
+        } else {
+          shade.addColorStop(0, "rgba(255, 240, 180, 0.1)");
+          shade.addColorStop(0.45, "rgba(255, 255, 255, 0)");
+          shade.addColorStop(1, "rgba(20, 40, 20, 0.12)");
+        }
         ctx.fillStyle = shade;
         ctx.fill();
         ctx.restore();
       }
 
-      // 水：深さ・岸・きらめき
+      // 城下町：写真タイル時は薄い暖色、未ロード時は従来の目地
+      if (isTown) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y - tileH / 2 - grow);
+        ctx.lineTo(p.x + tileW / 2 + grow, p.y);
+        ctx.lineTo(p.x, p.y + tileH / 2 + grow);
+        ctx.lineTo(p.x - tileW / 2 - grow, p.y);
+        ctx.closePath();
+        if (usePhotoTile) {
+          ctx.clip();
+          const warm = ctx.createLinearGradient(
+            p.x - tileW * 0.3,
+            p.y - tileH * 0.2,
+            p.x + tileW * 0.3,
+            p.y + tileH * 0.2
+          );
+          warm.addColorStop(0, "rgba(255, 250, 230, 0.08)");
+          warm.addColorStop(1, "rgba(60, 40, 20, 0.06)");
+          ctx.fillStyle = warm;
+          ctx.fillRect(p.x - tileW, p.y - tileH, tileW * 2, tileH * 2);
+          ctx.restore();
+          ctx.strokeStyle = "rgba(40, 30, 18, 0.12)";
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(p.x, p.y - tileH / 2 - grow);
+          ctx.lineTo(p.x + tileW / 2 + grow, p.y);
+          ctx.lineTo(p.x, p.y + tileH / 2 + grow);
+          ctx.lineTo(p.x - tileW / 2 - grow, p.y);
+          ctx.closePath();
+          ctx.stroke();
+        } else {
+          ctx.clip();
+          const isPath = townPathSet.has(`${col},${row}`);
+          if (isPath) {
+            ctx.strokeStyle = "rgba(40, 34, 28, 0.35)";
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(p.x - tileW * 0.22, p.y - tileH * 0.08);
+            ctx.lineTo(p.x + tileW * 0.18, p.y + tileH * 0.12);
+            ctx.moveTo(p.x + tileW * 0.08, p.y - tileH * 0.18);
+            ctx.lineTo(p.x - tileW * 0.12, p.y + tileH * 0.16);
+            ctx.stroke();
+            ctx.fillStyle = "rgba(255,255,255,0.06)";
+            ctx.beginPath();
+            ctx.ellipse(
+              p.x - tileW * 0.1,
+              p.y - tileH * 0.08,
+              tileW * 0.16,
+              tileH * 0.08,
+              -0.4,
+              0,
+              Math.PI * 2
+            );
+            ctx.fill();
+          } else {
+            ctx.strokeStyle = "rgba(120, 90, 50, 0.22)";
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(p.x - tileW * 0.28, p.y);
+            ctx.lineTo(p.x + tileW * 0.28, p.y);
+            ctx.moveTo(p.x, p.y - tileH * 0.22);
+            ctx.lineTo(p.x, p.y + tileH * 0.22);
+            ctx.stroke();
+            const warm = ctx.createLinearGradient(
+              p.x - tileW * 0.3,
+              p.y - tileH * 0.2,
+              p.x + tileW * 0.3,
+              p.y + tileH * 0.2
+            );
+            warm.addColorStop(0, "rgba(255, 250, 230, 0.16)");
+            warm.addColorStop(1, "rgba(90, 60, 20, 0.08)");
+            ctx.fillStyle = warm;
+            ctx.fillRect(p.x - tileW, p.y - tileH, tileW * 2, tileH * 2);
+          }
+          ctx.restore();
+          ctx.strokeStyle = isPath
+            ? "rgba(30, 24, 18, 0.28)"
+            : "rgba(150, 120, 70, 0.18)";
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(p.x, p.y - tileH / 2 - grow);
+          ctx.lineTo(p.x + tileW / 2 + grow, p.y);
+          ctx.lineTo(p.x, p.y + tileH / 2 + grow);
+          ctx.lineTo(p.x - tileW / 2 - grow, p.y);
+          ctx.closePath();
+          ctx.stroke();
+        }
+      }
+
+      // 水：写真タイル＋軽いきらめき
       if (isWater) {
         ctx.save();
         ctx.beginPath();
@@ -693,22 +1028,32 @@ export default function GameCanvasIso({
         ctx.closePath();
         ctx.clip();
 
-        // 深さグラデ（中央やや明るく、縁は濃い）
-        const depth = ctx.createRadialGradient(
-          p.x - tileW * 0.08,
-          p.y - tileH * 0.1,
-          tileW * 0.05,
-          p.x,
-          p.y,
-          tileW * 0.62
-        );
-        depth.addColorStop(0, "rgba(55, 120, 190, 0.28)");
-        depth.addColorStop(0.45, "rgba(20, 70, 140, 0.12)");
-        depth.addColorStop(1, "rgba(6, 24, 64, 0.42)");
-        ctx.fillStyle = depth;
-        ctx.fillRect(p.x - tileW, p.y - tileH, tileW * 2, tileH * 2);
+        const wIdx = pickFieldWaterTile(col, row, waterSet);
+        const wImg =
+          wIdx >= 0 && wIdx < waterTileImgs.length
+            ? waterTileImgs[wIdx]
+            : null;
+        const useWaterPhoto =
+          !!wImg && wImg.complete && wImg.naturalWidth > 0;
 
-        // 岸に近いほど暗く（地面の影）
+        if (useWaterPhoto && wImg) {
+          const ox = (hash2(col, row, 91) - 0.5) * tileW * 0.06;
+          const oy = (hash2(col, row, 92) - 0.5) * tileH * 0.06;
+          const dw = tileW * 1.24;
+          const dh = tileH * 1.38;
+          ctx.drawImage(
+            wImg,
+            p.x - dw / 2 + ox,
+            p.y - dh / 2 + oy,
+            dw,
+            dh
+          );
+        } else {
+          ctx.fillStyle = fill;
+          ctx.fillRect(p.x - tileW, p.y - tileH, tileW * 2, tileH * 2);
+        }
+
+        // 岸影（写真タイル時は控えめ）
         let landN = 0;
         for (const [dc, dr] of [
           [1, 0],
@@ -723,46 +1068,51 @@ export default function GameCanvasIso({
           if (!waterSet.has(`${col + dc},${row + dr}`)) landN += 1;
         }
         if (landN > 0) {
-          ctx.fillStyle = `rgba(4, 18, 42, ${Math.min(0.38, 0.045 * landN)})`;
+          const a = useWaterPhoto
+            ? Math.min(0.16, 0.02 * landN)
+            : Math.min(0.38, 0.045 * landN);
+          ctx.fillStyle = `rgba(4, 18, 42, ${a})`;
           ctx.fillRect(p.x - tileW, p.y - tileH, tileW * 2, tileH * 2);
         }
 
-        // ゆるい波紋（時間でわずかに動く）
+        // ゆるい波紋・きらめき（時間でわずかに動く）
         const phase = ts * 0.0018 + col * 0.55 + row * 0.4;
-        ctx.strokeStyle = "rgba(160, 210, 255, 0.14)";
-        ctx.lineWidth = 1.1;
-        for (let i = 0; i < 2; i++) {
-          const yy = p.y - tileH * 0.18 + i * tileH * 0.22 + Math.sin(phase + i) * 2.2;
-          ctx.beginPath();
-          ctx.moveTo(p.x - tileW * 0.32, yy);
-          ctx.quadraticCurveTo(
-            p.x + Math.cos(phase * 0.7 + i) * 4,
-            yy - 2.5,
-            p.x + tileW * 0.32,
-            yy + 1
-          );
-          ctx.stroke();
+        if (!useWaterPhoto) {
+          ctx.strokeStyle = "rgba(160, 210, 255, 0.14)";
+          ctx.lineWidth = 1.1;
+          for (let i = 0; i < 2; i++) {
+            const yy =
+              p.y - tileH * 0.18 + i * tileH * 0.22 + Math.sin(phase + i) * 2.2;
+            ctx.beginPath();
+            ctx.moveTo(p.x - tileW * 0.32, yy);
+            ctx.quadraticCurveTo(
+              p.x + Math.cos(phase * 0.7 + i) * 4,
+              yy - 2.5,
+              p.x + tileW * 0.32,
+              yy + 1
+            );
+            ctx.stroke();
+          }
         }
 
-        // 太陽光のハイライト
         const hx = p.x - tileW * 0.12 + Math.sin(phase * 0.6) * tileW * 0.05;
         const hy = p.y - tileH * 0.16 + Math.cos(phase * 0.5) * tileH * 0.04;
         const shine = ctx.createRadialGradient(hx, hy, 0, hx, hy, tileW * 0.28);
-        shine.addColorStop(0, "rgba(230, 245, 255, 0.34)");
-        shine.addColorStop(0.35, "rgba(160, 210, 255, 0.12)");
-        shine.addColorStop(1, "rgba(160, 210, 255, 0)");
+        if (useWaterPhoto) {
+          shine.addColorStop(0, "rgba(230, 245, 255, 0.12)");
+          shine.addColorStop(0.4, "rgba(160, 210, 255, 0.04)");
+          shine.addColorStop(1, "rgba(160, 210, 255, 0)");
+        } else {
+          shine.addColorStop(0, "rgba(230, 245, 255, 0.34)");
+          shine.addColorStop(0.35, "rgba(160, 210, 255, 0.12)");
+          shine.addColorStop(1, "rgba(160, 210, 255, 0)");
+        }
         ctx.fillStyle = shine;
         ctx.beginPath();
         ctx.ellipse(hx, hy, tileW * 0.22, tileH * 0.14, -0.4, 0, Math.PI * 2);
         ctx.fill();
 
         ctx.restore();
-      }
-
-      if (isTown) {
-        ctx.strokeStyle = "rgba(0,0,0,0.12)";
-        ctx.lineWidth = 1;
-        ctx.stroke();
       }
     };
 
@@ -833,68 +1183,70 @@ export default function GameCanvasIso({
       ctx.restore();
     };
 
-    /** ワールドマップ境界の青い丸 */
+    /** 青き境界の丸 */
     const drawGateMarkers = (ctx: CanvasRenderingContext2D, ts: number) => {
-      if (!fieldGate) return;
+      if (!isField || fieldGates.length === 0) return;
       const pulse = (Math.sin(ts / 420) + 1) / 2;
-      for (const m of fieldGate.markers) {
-        const p = isoToScreen(m.col, m.row);
-        const cx = p.x;
-        const cy = p.y + tileH * 0.06;
-        const rx = tileW * 0.22;
-        const ry = tileH * 0.16;
-        ctx.save();
-        // 地面の影
-        ctx.fillStyle = "rgba(10, 30, 70, 0.28)";
-        ctx.beginPath();
-        ctx.ellipse(cx, cy + 2, rx * 1.05, ry * 1.05, 0, 0, Math.PI * 2);
-        ctx.fill();
-        // 外側グロー
-        const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, rx * 1.6);
-        glow.addColorStop(0, `rgba(120, 200, 255, ${0.35 + 0.2 * pulse})`);
-        glow.addColorStop(0.55, `rgba(60, 140, 230, ${0.18 + 0.1 * pulse})`);
-        glow.addColorStop(1, "rgba(40, 100, 200, 0)");
-        ctx.fillStyle = glow;
-        ctx.beginPath();
-        ctx.ellipse(cx, cy, rx * 1.55, ry * 1.55, 0, 0, Math.PI * 2);
-        ctx.fill();
-        // 本体
-        const body = ctx.createRadialGradient(
-          cx - rx * 0.25,
-          cy - ry * 0.35,
-          0,
-          cx,
-          cy,
-          rx
-        );
-        body.addColorStop(0, "#d8f0ff");
-        body.addColorStop(0.35, "#5eb0ff");
-        body.addColorStop(0.75, "#2a6fd4");
-        body.addColorStop(1, "#1a4a9a");
-        ctx.fillStyle = body;
-        ctx.beginPath();
-        ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
-        ctx.fill();
-        // 縁
-        ctx.strokeStyle = `rgba(200, 236, 255, ${0.75 + 0.2 * pulse})`;
-        ctx.lineWidth = 1.6;
-        ctx.beginPath();
-        ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
-        ctx.stroke();
-        // ハイライト
-        ctx.fillStyle = "rgba(255, 255, 255, 0.45)";
-        ctx.beginPath();
-        ctx.ellipse(
-          cx - rx * 0.22,
-          cy - ry * 0.35,
-          rx * 0.28,
-          ry * 0.22,
-          -0.4,
-          0,
-          Math.PI * 2
-        );
-        ctx.fill();
-        ctx.restore();
+      for (const gate of fieldGates) {
+        for (const m of gate.markers) {
+          const p = isoToScreen(m.col, m.row);
+          const cx = p.x;
+          const cy = p.y + tileH * 0.06;
+          const rx = tileW * 0.22;
+          const ry = tileH * 0.16;
+          ctx.save();
+          // 地面の影
+          ctx.fillStyle = "rgba(10, 30, 70, 0.28)";
+          ctx.beginPath();
+          ctx.ellipse(cx, cy + 2, rx * 1.05, ry * 1.05, 0, 0, Math.PI * 2);
+          ctx.fill();
+          // 外側グロー
+          const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, rx * 1.6);
+          glow.addColorStop(0, `rgba(120, 200, 255, ${0.35 + 0.2 * pulse})`);
+          glow.addColorStop(0.55, `rgba(60, 140, 230, ${0.18 + 0.1 * pulse})`);
+          glow.addColorStop(1, "rgba(40, 100, 200, 0)");
+          ctx.fillStyle = glow;
+          ctx.beginPath();
+          ctx.ellipse(cx, cy, rx * 1.55, ry * 1.55, 0, 0, Math.PI * 2);
+          ctx.fill();
+          // 本体
+          const body = ctx.createRadialGradient(
+            cx - rx * 0.25,
+            cy - ry * 0.35,
+            0,
+            cx,
+            cy,
+            rx
+          );
+          body.addColorStop(0, "#d8f0ff");
+          body.addColorStop(0.35, "#5eb0ff");
+          body.addColorStop(0.75, "#2a6fd4");
+          body.addColorStop(1, "#1a4a9a");
+          ctx.fillStyle = body;
+          ctx.beginPath();
+          ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+          ctx.fill();
+          // 縁
+          ctx.strokeStyle = `rgba(200, 236, 255, ${0.75 + 0.2 * pulse})`;
+          ctx.lineWidth = 1.6;
+          ctx.beginPath();
+          ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+          ctx.stroke();
+          // ハイライト
+          ctx.fillStyle = "rgba(255, 255, 255, 0.45)";
+          ctx.beginPath();
+          ctx.ellipse(
+            cx - rx * 0.22,
+            cy - ry * 0.35,
+            rx * 0.28,
+            ry * 0.22,
+            -0.4,
+            0,
+            Math.PI * 2
+          );
+          ctx.fill();
+          ctx.restore();
+        }
       }
     };
 
@@ -921,6 +1273,28 @@ export default function GameCanvasIso({
       ctx.restore();
     };
 
+    const drawFloatingLabel = (
+      ctx: CanvasRenderingContext2D,
+      x: number,
+      y: number,
+      text: string,
+      opts?: { color?: string; fontSize?: number }
+    ) => {
+      const color = opts?.color ?? "#5ef0ff";
+      const fontSize = opts?.fontSize ?? Math.max(11, Math.round(tileW * 0.14));
+      ctx.save();
+      ctx.font = `bold ${fontSize}px "Segoe UI", "Hiragino Sans", sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "bottom";
+      ctx.lineJoin = "round";
+      ctx.lineWidth = Math.max(3, fontSize * 0.28);
+      ctx.strokeStyle = "rgba(0,0,0,0.85)";
+      ctx.strokeText(text, x, y);
+      ctx.fillStyle = color;
+      ctx.fillText(text, x, y);
+      ctx.restore();
+    };
+
     const drawQuestBoard = (
       ctx: CanvasRenderingContext2D,
       col: number,
@@ -930,12 +1304,12 @@ export default function GameCanvasIso({
       const p = isoToScreen(col, row);
       const cx = p.x;
       const cy = p.y;
-      const bw = tileW * 0.72;
-      const bh = tileH * 1.55;
-      const top = cy - bh * 0.95;
+      const bw = tileW * 0.92;
+      const bh = tileH * 1.85;
+      const top = cy - bh * 0.98;
       const left = cx - bw / 2;
-      const boardH = bh * 0.72;
-      const rr = 6;
+      const boardH = bh * 0.7;
+      const rr = 5;
 
       const boardPath = () => {
         ctx.beginPath();
@@ -958,30 +1332,91 @@ export default function GameCanvasIso({
 
       ctx.save();
       // 影
-      ctx.fillStyle = "rgba(0,0,0,0.28)";
+      ctx.fillStyle = "rgba(0,0,0,0.3)";
       ctx.beginPath();
-      ctx.ellipse(cx, cy + 6, bw * 0.45, tileH * 0.22, 0, 0, Math.PI * 2);
+      ctx.ellipse(cx, cy + 8, bw * 0.48, tileH * 0.24, 0, 0, Math.PI * 2);
       ctx.fill();
-      // 支柱
-      ctx.fillStyle = "#5a3d22";
-      ctx.fillRect(cx - 5, cy - bh * 0.15, 10, bh * 0.55);
-      // 看板本体
-      ctx.fillStyle = "#8b5a2b";
-      ctx.strokeStyle = "#3e2410";
-      ctx.lineWidth = 2;
+
+      // 二本の支柱
+      ctx.fillStyle = "#4a3018";
+      ctx.fillRect(cx - bw * 0.28, cy - bh * 0.12, 8, bh * 0.5);
+      ctx.fillRect(cx + bw * 0.22, cy - bh * 0.12, 8, bh * 0.5);
+
+      // 外枠（濃い木）
+      ctx.fillStyle = "#6b3e1a";
+      ctx.strokeStyle = "#2a1508";
+      ctx.lineWidth = 2.5;
       boardPath();
       ctx.fill();
       ctx.stroke();
-      // 紙面
-      ctx.fillStyle = "#f0e0b8";
-      ctx.fillRect(cx - bw * 0.38, top + bh * 0.1, bw * 0.76, bh * 0.48);
-      ctx.fillStyle = "#5a3a18";
-      ctx.font = `bold ${Math.max(10, Math.floor(tileW * 0.12))}px sans-serif`;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText("クエスト", cx, top + bh * 0.34);
 
-      // ホバー枠（近い=緑 / 遠い=赤）
+      // 上部の飾りカーブ
+      ctx.strokeStyle = "#c9a26a";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(left + 8, top + 10);
+      ctx.quadraticCurveTo(cx, top - 6, left + bw - 8, top + 10);
+      ctx.stroke();
+      ctx.fillStyle = "#d4b07a";
+      ctx.beginPath();
+      ctx.arc(cx, top + 4, 4, 0, Math.PI * 2);
+      ctx.fill();
+
+      // コルク面
+      const pad = bw * 0.08;
+      ctx.fillStyle = "#5c3a22";
+      ctx.fillRect(
+        left + pad,
+        top + boardH * 0.14,
+        bw - pad * 2,
+        boardH * 0.72
+      );
+      ctx.fillStyle = "rgba(0,0,0,0.15)";
+      for (let i = 0; i < 5; i++) {
+        ctx.fillRect(
+          left + pad + 4 + i * 7,
+          top + boardH * 0.2,
+          2,
+          boardH * 0.55
+        );
+      }
+
+      // 貼り紙
+      const papers = [
+        { x: 0.18, y: 0.22, w: 0.28, h: 0.28, rot: -0.08 },
+        { x: 0.48, y: 0.2, w: 0.3, h: 0.32, rot: 0.06 },
+        { x: 0.28, y: 0.48, w: 0.26, h: 0.26, rot: 0.04 },
+        { x: 0.55, y: 0.5, w: 0.24, h: 0.24, rot: -0.05 },
+      ];
+      for (const paper of papers) {
+        const px = left + bw * paper.x;
+        const py = top + boardH * paper.y;
+        const pw = bw * paper.w;
+        const ph = boardH * paper.h;
+        ctx.save();
+        ctx.translate(px + pw / 2, py + ph / 2);
+        ctx.rotate(paper.rot);
+        ctx.fillStyle = "#f7f1e2";
+        ctx.strokeStyle = "rgba(60,40,20,0.35)";
+        ctx.lineWidth = 1;
+        ctx.fillRect(-pw / 2, -ph / 2, pw, ph);
+        ctx.strokeRect(-pw / 2, -ph / 2, pw, ph);
+        ctx.strokeStyle = "rgba(90,70,40,0.25)";
+        ctx.beginPath();
+        ctx.moveTo(-pw * 0.3, -ph * 0.15);
+        ctx.lineTo(pw * 0.3, -ph * 0.1);
+        ctx.moveTo(-pw * 0.28, 0);
+        ctx.lineTo(pw * 0.25, 0.05);
+        ctx.stroke();
+        // ピン
+        ctx.fillStyle = "#c04040";
+        ctx.beginPath();
+        ctx.arc(0, -ph / 2 + 3, 2.2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+
+      // ホバー枠
       if (highlight) {
         const glow =
           highlight === "ok"
@@ -989,8 +1424,8 @@ export default function GameCanvasIso({
             : "rgba(255, 80, 80, 0.85)";
         const soft =
           highlight === "ok"
-            ? "rgba(90, 220, 120, 0.22)"
-            : "rgba(255, 80, 80, 0.22)";
+            ? "rgba(90, 220, 120, 0.18)"
+            : "rgba(255, 80, 80, 0.18)";
         boardPath();
         ctx.fillStyle = soft;
         ctx.fill();
@@ -998,14 +1433,77 @@ export default function GameCanvasIso({
         ctx.strokeStyle = glow;
         ctx.lineWidth = 3;
         ctx.stroke();
-        // 外側のうっすら光
-        boardPath();
-        ctx.strokeStyle =
-          highlight === "ok"
-            ? "rgba(140, 255, 170, 0.35)"
-            : "rgba(255, 160, 160, 0.35)";
-        ctx.lineWidth = 7;
-        ctx.stroke();
+      }
+
+      drawFloatingLabel(ctx, cx, top - 4, "クエストボード");
+      ctx.restore();
+    };
+
+    const drawTownProp = (ctx: CanvasRenderingContext2D, prop: TownProp) => {
+      const p = isoToScreen(prop.col, prop.row);
+      const ox = (prop.ox ?? 0) * tileW;
+      const oy = (prop.oy ?? 0) * tileH;
+      const x = p.x + ox;
+      const y = p.y + oy;
+      ctx.save();
+      if (prop.kind === "fence") {
+        ctx.fillStyle = "rgba(0,0,0,0.2)";
+        ctx.beginPath();
+        ctx.ellipse(x, y + 4, 10, 4, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "#8b6a3e";
+        ctx.fillRect(x - 10, y - 10, 3, 14);
+        ctx.fillRect(x + 7, y - 10, 3, 14);
+        ctx.fillRect(x - 11, y - 12, 22, 3);
+        ctx.fillStyle = "#a88450";
+        ctx.fillRect(x - 11, y - 6, 22, 2);
+      } else if (prop.kind === "planter") {
+        ctx.fillStyle = "rgba(0,0,0,0.22)";
+        ctx.beginPath();
+        ctx.ellipse(x, y + 5, 14, 5, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "#6b4424";
+        ctx.fillRect(x - 12, y - 4, 24, 10);
+        ctx.fillStyle = "#8a5a30";
+        ctx.fillRect(x - 13, y - 6, 26, 4);
+        ctx.fillStyle = "#3d8a45";
+        ctx.beginPath();
+        ctx.ellipse(x, y - 8, 11, 6, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "#ff6b8a";
+        for (const [fx, fy] of [
+          [-5, -10],
+          [2, -12],
+          [6, -8],
+        ] as const) {
+          ctx.beginPath();
+          ctx.arc(x + fx, y + fy, 2.2, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      } else if (prop.kind === "banner") {
+        ctx.fillStyle = "#5a4030";
+        ctx.fillRect(x - 2, y - 42, 4, 46);
+        ctx.fillStyle = "#2a6ec8";
+        ctx.beginPath();
+        ctx.moveTo(x, y - 40);
+        ctx.lineTo(x + 16, y - 34);
+        ctx.lineTo(x + 16, y - 14);
+        ctx.lineTo(x, y - 20);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillStyle = "rgba(255,255,255,0.25)";
+        ctx.fillRect(x + 3, y - 36, 3, 18);
+      } else {
+        ctx.fillStyle = "rgba(0,0,0,0.22)";
+        ctx.beginPath();
+        ctx.ellipse(x, y + 4, 12, 5, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "#9a7048";
+        ctx.fillRect(x - 10, y - 12, 20, 16);
+        ctx.strokeStyle = "#5a3a20";
+        ctx.strokeRect(x - 10, y - 12, 20, 16);
+        ctx.fillStyle = "#b08050";
+        ctx.fillRect(x - 10, y - 12, 20, 4);
       }
       ctx.restore();
     };
@@ -1064,13 +1562,7 @@ export default function GameCanvasIso({
         ctx.strokeRect(x, y, w, h);
       }
 
-      ctx.fillStyle = "rgba(0,0,0,0.55)";
-      ctx.fillRect(p.x - 28, p.y + 8, 56, 16);
-      ctx.fillStyle = "#ffe7b0";
-      ctx.font = "bold 11px sans-serif";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(label, p.x, p.y + 16);
+      drawFloatingLabel(ctx, p.x, dy - 2, label);
       ctx.restore();
     };
 
@@ -1112,11 +1604,8 @@ export default function GameCanvasIso({
       lastTs = null;
       raf = requestAnimationFrame(loop);
     };
-    // onload を src より先に付ける（キャッシュ時に onload を取りこぼして固まるのを防ぐ）
-    charImg.onload = startLoop;
     charImg.onerror = (e) => {
       console.error("キャラ画像読み込み失敗", e);
-      startLoop();
     };
     charImg.src = "/chara.png";
 
@@ -1153,6 +1642,12 @@ export default function GameCanvasIso({
     /** 防具屋NPC */
     let hoverArmorSmith = false;
     let pendingArmorSmithTap = false;
+    /** ワープ屋NPC（始まりの草原） */
+    let hoverWarpKeeper = false;
+    let pendingWarpTap = false;
+    /** ボスホバー */
+    let hoverBoss = false;
+    let pendingBossTap = false;
     /** ボード操作に必要な距離（マス。同じマス〜隣まで） */
     const QUEST_BOARD_REACH = 1;
 
@@ -1160,11 +1655,11 @@ export default function GameCanvasIso({
       if (!isTown) return false;
       const p = isoToScreen(QUEST_BOARD.col, QUEST_BOARD.row);
       // drawQuestBoard の木板部分だけ（足元マスは含めない）
-      const bw = tileW * 0.72;
-      const bh = tileH * 1.55;
-      const top = p.y - bh * 0.95;
+      const bw = tileW * 0.92;
+      const bh = tileH * 1.85;
+      const top = p.y - bh * 0.98;
       const left = p.x - bw / 2;
-      const boardH = bh * 0.72;
+      const boardH = bh * 0.7;
       const pad = 6;
       return (
         worldX >= left - pad &&
@@ -1180,7 +1675,6 @@ export default function GameCanvasIso({
       col: number,
       row: number
     ): boolean {
-      if (!isTown) return false;
       const b = getNpcBounds(col, row);
       const pad = 4;
       return (
@@ -1192,11 +1686,42 @@ export default function GameCanvasIso({
     }
 
     function hitWeaponSmith(worldX: number, worldY: number): boolean {
+      if (!isTown) return false;
       return hitNpcAt(worldX, worldY, WEAPON_SMITH.col, WEAPON_SMITH.row);
     }
 
     function hitArmorSmith(worldX: number, worldY: number): boolean {
+      if (!isTown) return false;
       return hitNpcAt(worldX, worldY, ARMOR_SMITH.col, ARMOR_SMITH.row);
+    }
+
+    function hitWarpKeeper(worldX: number, worldY: number): boolean {
+      if (!showWarpShop) return false;
+      return hitNpcAt(
+        worldX,
+        worldY,
+        FIELD_WARP_SHOP.col,
+        FIELD_WARP_SHOP.row
+      );
+    }
+
+    function hitBossSprite(worldX: number, worldY: number): boolean {
+      if (!isSecret) return false;
+      const boss = monsters.find((m) => MONSTERS[m.id]?.boss);
+      if (!boss) return false;
+      const def = MONSTERS[boss.id];
+      const scale = (tileW / 56) * 1.35;
+      const drawW = 96 * scale;
+      const drawH = 88 * scale;
+      const top = boss.y - drawH * 0.8;
+      const left = boss.x - drawW / 2;
+      const pad = 8;
+      return (
+        worldX >= left - pad &&
+        worldX <= left + drawW + pad &&
+        worldY >= top - pad &&
+        worldY <= boss.y + tileH * 0.35 + pad
+      );
     }
 
     function isNearCell(col: number, row: number): boolean {
@@ -1219,6 +1744,10 @@ export default function GameCanvasIso({
 
     function isNearArmorSmith(): boolean {
       return isNearCell(ARMOR_SMITH.col, ARMOR_SMITH.row);
+    }
+
+    function isNearWarpKeeper(): boolean {
+      return isNearCell(FIELD_WARP_SHOP.col, FIELD_WARP_SHOP.row);
     }
 
     function openQuestBoardNow() {
@@ -1272,15 +1801,69 @@ export default function GameCanvasIso({
       }
     }
 
+    function openWarpShopNow() {
+      if (!showWarpShop) return;
+      if (!isNearWarpKeeper()) {
+        pushChatMessage("ワープ屋にもっと近づいてみよう", "system");
+        flashCell = {
+          col: FIELD_WARP_SHOP.col,
+          row: FIELD_WARP_SHOP.row,
+          until: performance.now() + 400,
+        };
+        return;
+      }
+      try {
+        warpShopRef.current?.();
+      } catch (e) {
+        console.error("warp shop open failed", e);
+      }
+    }
+
     function issueMoveTo(cell: { col: number; row: number }, asLong = false) {
+      if (battleTransition || areaExitStarted) return;
       if (cell.col < 0) return;
-      if (isBlocked(cell.col, cell.row)) {
+
+      const bossHit = findBossAtCell(cell.col, cell.row);
+      if (bossHit) {
+        if (isNearBoss(bossHit)) {
+          askBossFight(bossHit);
+          return;
+        }
+        const approach = pickBossApproachCell(bossHit);
+        if (!approach) {
+          askBossFight(bossHit);
+          return;
+        }
+        cell = approach;
+        battleMonsterId = bossHit.id;
+        battleInstanceId = bossHit.instanceId;
+      } else if (isBlocked(cell.col, cell.row)) {
         flashCell = { col: cell.col, row: cell.row, until: performance.now() + 300 };
         return;
       }
 
-      const curCell = screenToIso(state.current.x, state.current.y);
-      const pathFound = findPath(curCell, { col: cell.col, row: cell.row });
+      // 停止中は見た目位置から論理マスを再同期（戦闘復帰後のずれ対策）
+      if (!state.current.moving) {
+        const approx = screenToIso(state.current.x, state.current.y);
+        if (
+          approx.col >= 0 &&
+          inBounds(approx.col, approx.row) &&
+          !isBlocked(approx.col, approx.row)
+        ) {
+          playerCol = approx.col;
+          playerRow = approx.row;
+        }
+      }
+
+      const curCell = { col: playerCol, row: playerRow };
+      let pathFound = findPath(curCell, { col: cell.col, row: cell.row });
+      if (!pathFound) {
+        // フォールバック: 画面座標からの推定でもう一度
+        const approx = screenToIso(state.current.x, state.current.y);
+        if (approx.col >= 0) {
+          pathFound = findPath(approx, { col: cell.col, row: cell.row });
+        }
+      }
       if (!pathFound) {
         flashCell = { col: cell.col, row: cell.row, until: performance.now() + 300 };
         path = [];
@@ -1288,33 +1871,35 @@ export default function GameCanvasIso({
         return;
       }
 
-      battleMonsterId = null;
-      battleInstanceId = null;
-      // クリック先に敵がいればそれを優先（道中の別敵にすり替わらない）
-      const goalMonster = monsters.find(
-        (m) => m.col === cell.col && m.row === cell.row
-      );
-      if (goalMonster) {
-        battleMonsterId = goalMonster.id;
-        battleInstanceId = goalMonster.instanceId;
-        const monsterIndex = pathFound.findIndex(
-          (node) =>
-            node.col === goalMonster.col && node.row === goalMonster.row
+      if (!bossHit) {
+        battleMonsterId = null;
+        battleInstanceId = null;
+        // クリック先に敵がいればそれを優先（道中の別敵にすり替わらない）
+        const goalMonster = monsters.find(
+          (m) => m.col === cell.col && m.row === cell.row
         );
-        if (monsterIndex >= 0) pathFound.splice(monsterIndex);
-      } else {
-        const monsterIndex = pathFound.findIndex((node) =>
-          monsters.some((m) => m.col === node.col && m.row === node.row)
-        );
-        if (monsterIndex >= 0) {
-          const monster = monsters.find(
-            (m) =>
-              m.col === pathFound[monsterIndex].col &&
-              m.row === pathFound[monsterIndex].row
+        if (goalMonster) {
+          battleMonsterId = goalMonster.id;
+          battleInstanceId = goalMonster.instanceId;
+          const monsterIndex = pathFound.findIndex(
+            (node) =>
+              node.col === goalMonster.col && node.row === goalMonster.row
           );
-          battleMonsterId = monster?.id ?? null;
-          battleInstanceId = monster?.instanceId ?? null;
-          pathFound.splice(monsterIndex);
+          if (monsterIndex >= 0) pathFound.splice(monsterIndex);
+        } else {
+          const monsterIndex = pathFound.findIndex((node) =>
+            monsters.some((m) => m.col === node.col && m.row === node.row)
+          );
+          if (monsterIndex >= 0) {
+            const monster = monsters.find(
+              (m) =>
+                m.col === pathFound[monsterIndex].col &&
+                m.row === pathFound[monsterIndex].row
+            );
+            battleMonsterId = monster?.id ?? null;
+            battleInstanceId = monster?.instanceId ?? null;
+            pathFound.splice(monsterIndex);
+          }
         }
       }
 
@@ -1322,13 +1907,12 @@ export default function GameCanvasIso({
       const next = path.shift();
       if (!next) {
         state.current.moving = false;
-        if (gateExitSet.has(`${cell.col},${cell.row}`)) {
-          playerCol = cell.col;
-          playerRow = cell.row;
-          startWorldMapExit();
-          return;
+        playerCol = cell.col;
+        playerRow = cell.row;
+        if (checkGateExit(playerCol, playerRow)) return;
+        if (battleMonsterId != null && battleInstanceId) {
+          beginBattleOrAsk(battleMonsterId, battleInstanceId);
         }
-        if (battleMonsterId) startBattleTransition();
         return;
       }
       const center = isoToScreen(next.col, next.row);
@@ -1376,11 +1960,24 @@ export default function GameCanvasIso({
       pendingSmithTap = !pendingBoardTap && hitWeaponSmith(w.x, w.y);
       pendingArmorSmithTap =
         !pendingBoardTap && !pendingSmithTap && hitArmorSmith(w.x, w.y);
+      pendingWarpTap =
+        !pendingBoardTap &&
+        !pendingSmithTap &&
+        !pendingArmorSmithTap &&
+        hitWarpKeeper(w.x, w.y);
+      pendingBossTap =
+        !pendingBoardTap &&
+        !pendingSmithTap &&
+        !pendingArmorSmithTap &&
+        !pendingWarpTap &&
+        hitBossSprite(w.x, w.y);
       // 看板／NPC押しのときはマス移動にしない
       pendingTap =
         pendingBoardTap ||
         pendingSmithTap ||
         pendingArmorSmithTap ||
+        pendingWarpTap ||
+        pendingBossTap ||
         cell.col < 0
           ? null
           : { col: cell.col, row: cell.row };
@@ -1396,6 +1993,13 @@ export default function GameCanvasIso({
         } else if (!movedEnough && pendingArmorSmithTap) {
           longPressActive = true;
           openArmorShopNow();
+        } else if (!movedEnough && pendingWarpTap) {
+          longPressActive = true;
+          openWarpShopNow();
+        } else if (!movedEnough && pendingBossTap) {
+          longPressActive = true;
+          const boss = monsters.find((m) => MONSTERS[m.id]?.boss);
+          if (boss) issueMoveTo({ col: boss.col, row: boss.row }, true);
         } else if (!movedEnough && pendingTap) {
           longPressActive = true;
           issueMoveTo(pendingTap, true);
@@ -1413,8 +2017,25 @@ export default function GameCanvasIso({
       hoverSmith = !hoverBoard && hitWeaponSmith(w.x, w.y);
       hoverArmorSmith =
         !hoverBoard && !hoverSmith && hitArmorSmith(w.x, w.y);
+      hoverWarpKeeper =
+        !hoverBoard &&
+        !hoverSmith &&
+        !hoverArmorSmith &&
+        hitWarpKeeper(w.x, w.y);
+      hoverBoss =
+        !hoverBoard &&
+        !hoverSmith &&
+        !hoverArmorSmith &&
+        !hoverWarpKeeper &&
+        hitBossSprite(w.x, w.y);
       canvas.style.cursor =
-        hoverBoard || hoverSmith || hoverArmorSmith ? "pointer" : "";
+        hoverBoard ||
+        hoverSmith ||
+        hoverArmorSmith ||
+        hoverWarpKeeper ||
+        hoverBoss
+          ? "pointer"
+          : "";
 
       if (!pointerDown) return;
 
@@ -1430,6 +2051,8 @@ export default function GameCanvasIso({
           pendingBoardTap = false;
           pendingSmithTap = false;
           pendingArmorSmithTap = false;
+          pendingWarpTap = false;
+          pendingBossTap = false;
           active.col = -1;
           active.row = -1;
           longActive.col = -1;
@@ -1453,23 +2076,34 @@ export default function GameCanvasIso({
         !pendingBoardTap &&
         !pendingSmithTap &&
         !pendingArmorSmithTap &&
+        !pendingWarpTap &&
+        !pendingBossTap &&
         cell.col >= 0
       ) {
         issueMoveTo(cell, true);
       }
     };
 
-    const onPointerUp = (ev: PointerEvent) => {
-      try {
-        (ev.target as Element).releasePointerCapture?.(ev.pointerId);
-      } catch {}
-      if (!panMode && !longPressActive) {
+    const endPointer = (ev?: PointerEvent) => {
+      if (ev) {
+        try {
+          (ev.target as Element).releasePointerCapture?.(ev.pointerId);
+        } catch {
+          /* ignore */
+        }
+      }
+      if (!panMode && !longPressActive && ev?.type === "pointerup") {
         if (pendingBoardTap) {
           openQuestBoardNow();
         } else if (pendingSmithTap) {
           openWeaponShopNow();
         } else if (pendingArmorSmithTap) {
           openArmorShopNow();
+        } else if (pendingWarpTap) {
+          openWarpShopNow();
+        } else if (pendingBossTap) {
+          const boss = monsters.find((m) => MONSTERS[m.id]?.boss);
+          if (boss) issueMoveTo({ col: boss.col, row: boss.row }, false);
         } else if (pendingTap) {
           issueMoveTo(pendingTap, false);
         }
@@ -1481,6 +2115,8 @@ export default function GameCanvasIso({
       pendingBoardTap = false;
       pendingSmithTap = false;
       pendingArmorSmithTap = false;
+      pendingWarpTap = false;
+      pendingBossTap = false;
       state.current.dragging = false;
       if (longPressTimer) {
         clearTimeout(longPressTimer);
@@ -1491,14 +2127,26 @@ export default function GameCanvasIso({
       longActive.row = -1;
     };
 
+    const onPointerUp = (ev: PointerEvent) => {
+      endPointer(ev);
+    };
+
+    const onPointerCancel = (ev: PointerEvent) => {
+      // 戦闘遷移などで pointerup が来ないとき用
+      endPointer(ev);
+    };
+
     canvas.style.touchAction = "none";
     canvas.addEventListener("pointerdown", onPointerDown);
     window.addEventListener("pointermove", onPointerMove);
     window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerCancel);
     const onPointerLeave = () => {
       hoverBoard = false;
       hoverSmith = false;
       hoverArmorSmith = false;
+      hoverWarpKeeper = false;
+      hoverBoss = false;
       canvas.style.cursor = "";
     };
     canvas.addEventListener("pointerleave", onPointerLeave);
@@ -1642,14 +2290,20 @@ export default function GameCanvasIso({
               }
             } else {
               state.current.moving = false;
-              if (!checkGateExit(playerCol, playerRow) && battleMonsterId) {
-                startBattleTransition();
+              if (
+                !checkGateExit(playerCol, playerRow) &&
+                battleMonsterId != null
+              ) {
+                beginBattleOrAsk(battleMonsterId, battleInstanceId);
               }
             }
           } else {
             state.current.moving = false;
-            if (!checkGateExit(playerCol, playerRow) && battleMonsterId) {
-              startBattleTransition();
+            if (
+              !checkGateExit(playerCol, playerRow) &&
+              battleMonsterId != null
+            ) {
+              beginBattleOrAsk(battleMonsterId, battleInstanceId);
             }
             active.col = -1; active.row = -1;
             longActive.col = -1; longActive.row = -1;
@@ -1684,6 +2338,10 @@ export default function GameCanvasIso({
         lastRespawnCheck = ts;
         if (isTown) {
           monsters = [];
+        } else if (isSecret) {
+          const bossList = createSecretBossMonster(SECRET_KELPIE_POS);
+          const prev = new Map(monsters.map((m) => [m.instanceId, m]));
+          monsters = bossList.map((m) => prev.get(m.instanceId) ?? toLive(m));
         } else {
           const synced = syncAliveFieldMonsters(
             monsters,
@@ -1700,7 +2358,16 @@ export default function GameCanvasIso({
       // clear（画面固定の背景）
       ctx.clearRect(-currentCssW / 2, -currentCssH / 2, currentCssW, currentCssH);
       if (isTown) {
-        ctx.fillStyle = "#2a2430";
+        const sky = ctx.createLinearGradient(
+          0,
+          -currentCssH / 2,
+          0,
+          currentCssH / 2
+        );
+        sky.addColorStop(0, "#9ec8e8");
+        sky.addColorStop(0.45, "#c8dff0");
+        sky.addColorStop(1, "#e8dcc0");
+        ctx.fillStyle = sky;
         ctx.fillRect(-currentCssW / 2, -currentCssH / 2, currentCssW, currentCssH);
       } else {
         const sky = ctx.createLinearGradient(
@@ -1743,16 +2410,16 @@ export default function GameCanvasIso({
             continue;
           }
           const base = isTown
-            ? (c + r) % 2 === 0
-              ? "#c4b49a"
-              : "#b39b7a"
+            ? townPathSet.has(`${c},${r}`)
+              ? townCobbleFill(c, r)
+              : townBrickFill(c, r)
             : fieldCellFill(c, r, pathSet, waterSet);
           drawTile(ctx, c, r, base, ts);
         }
       }
 
-      // 草むら装飾
-      if (!isTown) {
+      // 草むら装飾（写真タイル自体に草があるので控えめ／未ロード時のみ多め）
+      if (!isTown && fieldTilesReady < fieldTileImgs.length) {
         for (const t of grassTufts) {
           const p = isoToScreen(t.col, t.row);
           if (
@@ -1807,6 +2474,11 @@ export default function GameCanvasIso({
       // 岩描画
       for (const b of rockBlocked) drawRock(ctx, b.col, b.row);
 
+      // 城下町の装飾（柵・プランター・旗）
+      if (isTown) {
+        for (const prop of townProps) drawTownProp(ctx, prop);
+      }
+
       // 城下町クエストボード（マスに乗っても開かない／木板クリックのみ）
       if (isTown) {
         const hl = hoverBoard
@@ -1844,6 +2516,68 @@ export default function GameCanvasIso({
           ahl
         );
       }
+
+      // 始まりの草原・入り口付近のワープ屋
+      if (showWarpShop) {
+        const whl = hoverWarpKeeper
+          ? isNearWarpKeeper()
+            ? "ok"
+            : "far"
+          : null;
+        drawTownNpc(
+          ctx,
+          FIELD_WARP_SHOP.col,
+          FIELD_WARP_SHOP.row,
+          warpKeeperImg,
+          "ワープ屋",
+          whl
+        );
+      }
+
+      // 秘境の門
+      if (isSecret) {
+        const p = isoToScreen(SECRET_PORTAL.col, SECRET_PORTAL.row);
+        const pulse = (Math.sin(ts / 480) + 1) / 2;
+        ctx.save();
+        // 台座
+        ctx.fillStyle = "rgba(20, 16, 40, 0.45)";
+        ctx.beginPath();
+        ctx.ellipse(p.x, p.y + 6, tileW * 0.55, tileH * 0.28, 0, 0, Math.PI * 2);
+        ctx.fill();
+        // 門柱
+        ctx.fillStyle = "#4a3a68";
+        ctx.fillRect(p.x - tileW * 0.42, p.y - tileH * 1.7, tileW * 0.14, tileH * 1.75);
+        ctx.fillRect(p.x + tileW * 0.28, p.y - tileH * 1.7, tileW * 0.14, tileH * 1.75);
+        ctx.fillStyle = "#6a58a0";
+        ctx.fillRect(p.x - tileW * 0.48, p.y - tileH * 1.85, tileW * 0.96, tileH * 0.22);
+        // 門の光
+        const glow = ctx.createLinearGradient(
+          p.x,
+          p.y - tileH * 1.6,
+          p.x,
+          p.y + 2
+        );
+        glow.addColorStop(0, `rgba(180, 140, 255, ${0.15 + 0.25 * pulse})`);
+        glow.addColorStop(0.55, `rgba(80, 200, 255, ${0.35 + 0.2 * pulse})`);
+        glow.addColorStop(1, "rgba(40, 80, 160, 0.05)");
+        ctx.fillStyle = glow;
+        ctx.fillRect(
+          p.x - tileW * 0.28,
+          p.y - tileH * 1.65,
+          tileW * 0.56,
+          tileH * 1.7
+        );
+        ctx.strokeStyle = `rgba(220, 200, 255, ${0.55 + 0.35 * pulse})`;
+        ctx.lineWidth = 2;
+        ctx.strokeRect(
+          p.x - tileW * 0.28,
+          p.y - tileH * 1.65,
+          tileW * 0.56,
+          tileH * 1.7
+        );
+        drawFloatingLabel(ctx, p.x, p.y - tileH * 1.95, "秘境への門");
+        ctx.restore();
+      }
       
       // モンスター描画（徘徊中は補間座標）
       for (const m of monsters) {
@@ -1852,28 +2586,53 @@ export default function GameCanvasIso({
 
         const def = MONSTERS[m.id];
         const isCondor = m.id === 2;
-        const scale = tileW / 56;
-        const drawW = (isCondor ? 88 : 60) * scale;
-        const drawH = (isCondor ? 72 : 48) * scale;
-        const topY = m.y - drawH * 0.72;
+        const isBoss = !!def?.boss;
+        const span = def?.fieldTileSpan ?? 1;
+        // ボスは約2タイル強（以前は大きすぎた）
+        const scale = isBoss ? (tileW / 56) * 1.35 : tileW / 56;
+        const drawW = (isCondor ? 88 : isBoss ? 96 : 60) * scale;
+        const drawH = (isCondor ? 72 : isBoss ? 88 : 48) * scale;
+        const topY = m.y - drawH * (isBoss ? 0.8 : 0.72);
+
+        if (isBoss && hoverBoss) {
+          ctx.save();
+          const gx = m.x;
+          const gy = topY + drawH * 0.45;
+          const glow = ctx.createRadialGradient(
+            gx,
+            gy,
+            drawW * 0.08,
+            gx,
+            gy,
+            drawW * 0.72
+          );
+          glow.addColorStop(0, "rgba(200, 230, 255, 0.28)");
+          glow.addColorStop(0.45, "rgba(140, 190, 255, 0.12)");
+          glow.addColorStop(1, "rgba(120, 180, 255, 0)");
+          ctx.fillStyle = glow;
+          ctx.beginPath();
+          ctx.ellipse(gx, gy, drawW * 0.55, drawH * 0.42, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+
         ctx.drawImage(img, m.x - drawW / 2, topY, drawW, drawH);
 
-        // 頭上レベル（Lv n）
-        const lv = def?.level ?? 1;
-        const label = `Lv ${lv}`;
+        // 頭上レベル（Lv n / ???）
+        const label = def?.hideLevel ? "Lv ???" : `Lv ${def?.level ?? 1}`;
         const lx = m.x;
         const ly = topY - 4 * scale;
-        const fontSize = Math.max(11, Math.round(13 * scale));
+        const fontSize = Math.max(11, Math.round((isBoss ? 14 : 13) * Math.min(scale, 1.4)));
         ctx.save();
         ctx.font = `bold ${fontSize}px "Segoe UI", "Hiragino Sans", sans-serif`;
         ctx.textAlign = "center";
         ctx.textBaseline = "bottom";
         ctx.lineJoin = "round";
         ctx.miterLimit = 2;
-        ctx.lineWidth = Math.max(2.5, 3 * scale);
+        ctx.lineWidth = Math.max(2.5, 3 * Math.min(scale, 1.4));
         ctx.strokeStyle = "rgba(40, 28, 10, 0.9)";
         ctx.strokeText(label, lx, ly);
-        ctx.fillStyle = "#f0d878";
+        ctx.fillStyle = def?.hideLevel ? "#e8d0ff" : "#f0d878";
         ctx.fillText(label, lx, ly);
         ctx.restore();
       }
@@ -1935,7 +2694,6 @@ export default function GameCanvasIso({
         currentCssH
       );
 
-      console.log(transitionProgress);
       if (transitionProgress >= 1 && !isTransitioning) {
         isTransitioning = true;
         // 出発時に確保した instanceId を優先（道中の別敵と取り違えない）
@@ -1955,7 +2713,7 @@ export default function GameCanvasIso({
             monsterId: String(mid),
           });
           if (iid) q.set("instanceId", iid);
-          router.push(`/battle?${q.toString()}`);
+          routerRef.current.push(`/battle?${q.toString()}`);
         }, 500);
       }
     }
@@ -1990,12 +2748,12 @@ export default function GameCanvasIso({
       ctx.fill();
     }
 
-    // loop / lastTs 定義後に開始（キャッシュ済み画像でも確実に動く）
-    if (charImg.complete) startLoop();
+    // 画像を待たずループ開始（戦闘復帰後の固着防止）
+    startLoop();
 
     // クリーンアップ
     return () => {
-      if (!isTown && !worldMapExitStarted && !isTransitioning) {
+      if (isField && !areaExitStarted && !isTransitioning) {
         persistReturnPos();
       }
       if (raf) cancelAnimationFrame(raf);
@@ -2003,14 +2761,30 @@ export default function GameCanvasIso({
       canvas.removeEventListener("pointerdown", onPointerDown);
       window.removeEventListener("pointermove", onPointerMove);
       window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerCancel);
       canvas.removeEventListener("pointerleave", onPointerLeave);
     };
-  }, [areaId, isTown, router]);
+  }, [areaId, isTown, isField, isSecret]);
 
 
   return (
     <div className="canvas-wrapper">
       <canvas ref={canvasRef} />
+      {bossPrompt ? (
+        <BossBattleConfirm
+          name={bossPrompt.name}
+          onCancel={() => {
+            setBossPrompt(null);
+            bossConfirmRef.current = null;
+          }}
+          onConfirm={() => {
+            const fn = bossConfirmRef.current;
+            setBossPrompt(null);
+            bossConfirmRef.current = null;
+            fn?.();
+          }}
+        />
+      ) : null}
     </div>
   );
 }

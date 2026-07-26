@@ -1660,6 +1660,13 @@ body {
   border-color: #3a0a0a;
   animation: skill-banner-in-enemy 0.18s ease-out;
 }
+/* 複数敵：技名を各敵の身体付近へ */
+.lr-skill-banner.enemy.slot-0 {
+  top: 18%;
+}
+.lr-skill-banner.enemy.slot-1 {
+  top: 58%;
+}
 @keyframes skill-banner-in-player {
   from {
     opacity: 0;
@@ -2755,13 +2762,13 @@ body {
 /* ===== 勝利リザルト（Time / Exp / Poro）ログレス風 ===== */
 .lr-clear {
   position: absolute;
-  left: 6%;
-  top: 18%;
+  left: 5%;
+  top: 16%;
   z-index: 22;
   display: flex;
   flex-direction: column;
-  gap: 20px;
-  width: min(440px, 54%);
+  gap: 18px;
+  width: min(520px, 62%);
   pointer-events: none;
 }
 .lr-actor.player .lr-battle-chara.victory {
@@ -2803,14 +2810,17 @@ body {
   cursor: default;
 }
 .lr-clear-row {
+  --lr-step: 0;
   position: relative;
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 16px;
   padding-bottom: 10px;
+  margin-left: calc(var(--lr-step) * 1.55em);
+  width: calc(100% - var(--lr-step) * 1.55em);
   opacity: 0;
-  animation: lr-clear-row-in 1.15s cubic-bezier(0.22, 0.7, 0.25, 1) both;
+  animation: lr-clear-row-in 0.7s cubic-bezier(0.22, 0.7, 0.25, 1) both;
 }
 .lr-clear-row::after {
   content: "";
@@ -2829,7 +2839,7 @@ body {
   );
   box-shadow: 0 1px 0 rgba(255, 230, 160, 0.22);
   transform-origin: left center;
-  animation: lr-clear-line-in 1.05s ease both;
+  animation: lr-clear-line-in 0.65s ease both;
   animation-delay: inherit;
 }
 .lr-clear-label,
@@ -2870,6 +2880,73 @@ body {
     1px 2px 0 #3d280c,
     -1px 1px 0 #2a1a08,
     0 3px 6px rgba(0, 0, 0, 0.45);
+}
+.lr-clear-treasure {
+  --lr-step: 3;
+  position: relative;
+  opacity: 0;
+  animation: lr-clear-row-in 0.7s cubic-bezier(0.22, 0.7, 0.25, 1) both;
+  margin-top: -4px;
+  margin-left: calc(var(--lr-step) * 1.55em);
+  max-width: min(380px, calc(100% - var(--lr-step) * 1.55em));
+}
+.lr-clear-treasure-list {
+  list-style: none;
+  margin: 0;
+  padding: 12px 18px 18px;
+  max-height: min(180px, 30vh);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: auto;
+  border: none;
+  border-radius: 6px;
+  background: rgba(6, 14, 10, 0.58);
+  box-shadow:
+    0 0 18px 14px rgba(6, 14, 10, 0.42),
+    0 0 40px 22px rgba(6, 14, 10, 0.22),
+    inset 0 0 28px rgba(0, 0, 0, 0.2);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  scrollbar-width: thin;
+  scrollbar-color: rgba(200, 210, 180, 0.35) transparent;
+}
+.lr-clear-treasure-list::-webkit-scrollbar {
+  width: 4px;
+}
+.lr-clear-treasure-list::-webkit-scrollbar-thumb {
+  background: rgba(200, 210, 180, 0.35);
+  border-radius: 2px;
+}
+.lr-clear-treasure-item {
+  --lr-item-step: 0;
+  display: block;
+  margin-left: calc(var(--lr-item-step) * 0.85em);
+  font-family: "Hiragino Sans", "Yu Gothic UI", Meiryo, sans-serif;
+  font-style: normal;
+  font-weight: 700;
+  font-size: clamp(14px, 1.7vw, 17px);
+  letter-spacing: 0.03em;
+  line-height: 1.4;
+  text-shadow:
+    0 0 2px rgba(0, 0, 0, 0.9),
+    0 1px 3px rgba(0, 0, 0, 0.75);
+}
+.lr-clear-treasure-line {
+  display: inline;
+  border-bottom: 1px solid currentColor;
+  padding-bottom: 1px;
+}
+.lr-clear-treasure-more {
+  position: absolute;
+  right: 10px;
+  bottom: 4px;
+  font-size: 10px;
+  line-height: 1;
+  color: rgba(245, 248, 240, 0.9);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+  pointer-events: none;
 }
 .lr-clear-line {
   display: none;
@@ -2954,6 +3031,12 @@ body {
   .lr-skill-banner.enemy {
     top: 52%;
     left: calc(4% + min(80px, 22vw));
+  }
+  .lr-skill-banner.enemy.slot-0 {
+    top: 16%;
+  }
+  .lr-skill-banner.enemy.slot-1 {
+    top: 54%;
   }
   .lr-dmg-wrap.near {
     right: max(80px, 18%);

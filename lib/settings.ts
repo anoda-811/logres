@@ -1,7 +1,9 @@
 import type { AreaId } from "./locations";
+import { isValidAreaId } from "./locations";
 
 const AREA_KEY = "logres.currentArea";
 const BGM_KEY = "logres.bgmEnabled";
+const SFX_KEY = "logres.sfxEnabled";
 const FIELD_RETURN_POS_KEY = "logres.fieldReturnPos";
 
 export type FieldReturnPos = {
@@ -18,7 +20,7 @@ export function loadSavedAreaId(): AreaId {
   try {
     const v =
       localStorage.getItem(AREA_KEY) ?? sessionStorage.getItem(AREA_KEY);
-    if (v === "field" || v === "town") return v;
+    if (v && isValidAreaId(v)) return v;
   } catch {
     /* ignore */
   }
@@ -53,6 +55,25 @@ export function saveBgmEnabled(enabled: boolean) {
   }
 }
 
+export function loadSfxEnabled(): boolean {
+  if (typeof window === "undefined") return true;
+  try {
+    const v = localStorage.getItem(SFX_KEY);
+    if (v === null) return true;
+    return v !== "0";
+  } catch {
+    return true;
+  }
+}
+
+export function saveSfxEnabled(enabled: boolean) {
+  try {
+    localStorage.setItem(SFX_KEY, enabled ? "1" : "0");
+  } catch {
+    /* ignore */
+  }
+}
+
 /** 戦闘突入直前のフィールド位置を保存 */
 export function saveFieldReturnPos(pos: FieldReturnPos) {
   try {
@@ -79,7 +100,8 @@ export function consumeFieldReturnPos(): FieldReturnPos | null {
     sessionStorage.removeItem(FIELD_RETURN_POS_KEY);
     const parsed = JSON.parse(raw) as Partial<FieldReturnPos>;
     if (
-      (parsed.areaId === "field" || parsed.areaId === "town") &&
+      parsed.areaId &&
+      isValidAreaId(parsed.areaId) &&
       typeof parsed.col === "number" &&
       typeof parsed.row === "number" &&
       Number.isFinite(parsed.col) &&

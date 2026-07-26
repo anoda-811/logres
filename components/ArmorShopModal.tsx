@@ -1,14 +1,17 @@
 "use client";
 
 import { createPortal } from "react-dom";
-import { useSyncExternalStore } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
 import {
   ARMORS,
+  ARMOR_SHOP_TABS,
   buyArmor,
   equipGear,
   getGearSnapshot,
   getServerGearSnapshot,
   subscribeGear,
+  type GearKind,
+  type GearRarity,
 } from "../lib/equipment";
 import {
   addMoney,
@@ -18,11 +21,14 @@ import {
   subscribeQuests,
 } from "../lib/quests";
 import { pushChatMessage } from "../lib/chatStore";
+import styles from "./ShopModal.module.css";
 
 type Props = {
   open: boolean;
   onClose: () => void;
 };
+
+type PartTab = GearKind | "all";
 
 function useGearSnap() {
   return useSyncExternalStore(
@@ -40,11 +46,47 @@ function useMoney() {
   ).money;
 }
 
+function partIcon(slot: GearKind): string {
+  switch (slot) {
+    case "head":
+      return "頭";
+    case "body":
+      return "胴";
+    case "arms":
+      return "手";
+    case "waist":
+      return "下";
+    case "feet":
+      return "足";
+    default:
+      return "飾";
+  }
+}
+
+function partLabel(slot: GearKind): string {
+  return ARMOR_SHOP_TABS.find((t) => t.id === slot)?.label ?? "防具";
+}
+
+function rarityClass(r: GearRarity): string {
+  return styles[`rarity${r}` as keyof typeof styles] ?? "";
+}
+
+function rarityTagClass(r: GearRarity): string {
+  return styles[`rarityTag${r}` as keyof typeof styles] ?? "";
+}
+
 export default function ArmorShopModal({ open, onClose }: Props) {
   const { owned, equipped } = useGearSnap();
   const money = useMoney();
+  const [tab, setTab] = useState<PartTab>("all");
+
+  const list = useMemo(() => {
+    return ARMORS.filter((a) => tab === "all" || a.slot === tab);
+  }, [tab]);
 
   if (!open || typeof document === "undefined") return null;
+
+  const isEquipped = (id: string) => Object.values(equipped).includes(id);
 
   const onEquip = (id: string, name: string) => {
     if (!equipGear(id)) return;
@@ -60,203 +102,128 @@ export default function ArmorShopModal({ open, onClose }: Props) {
     pushChatMessage(result.message, "system");
   };
 
-  const isEquipped = (id: string) => Object.values(equipped).includes(id);
-
   return createPortal(
     <div
+      className={styles.root}
       role="dialog"
       aria-modal="true"
       aria-label="防具屋"
       onClick={onClose}
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 20000,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        background: "rgba(8, 10, 16, 0.62)",
-      }}
     >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          width: "min(420px, 92vw)",
-          maxHeight: "min(78vh, 560px)",
-          display: "flex",
-          flexDirection: "column",
-          padding: "16px 14px 12px",
-          borderRadius: 12,
-          background: "linear-gradient(180deg, #3a2428 0%, #1e1418 100%)",
-          border: "2px solid rgba(220, 140, 140, 0.45)",
-          color: "#fff0f0",
-          boxShadow: "0 16px 40px rgba(0,0,0,0.55)",
-        }}
-      >
-        <h3
-          style={{
-            margin: "0 0 4px",
-            fontSize: 18,
-            fontWeight: 800,
-            textAlign: "center",
-          }}
-        >
-          防具屋
-        </h3>
-        <p
-          style={{
-            margin: "0 0 12px",
-            fontSize: 12,
-            textAlign: "center",
-            opacity: 0.75,
-          }}
-        >
-          防具職人「リーネ」— 防具・装飾の購入　所持金 {money.toLocaleString()} 円
-        </p>
-        <div
-          style={{
-            flex: 1,
-            overflowY: "auto",
-            display: "flex",
-            flexDirection: "column",
-            gap: 10,
-            marginBottom: 12,
-          }}
-        >
-          {ARMORS.map((w) => {
-            const has = owned.includes(w.id);
-            const eq = isEquipped(w.id);
-            const slotLabel =
-              w.slot === "head"
-                ? "頭"
-                : w.slot === "body"
-                  ? "上半身"
-                  : w.slot === "arms"
-                    ? "手"
-                    : w.slot === "waist"
-                      ? "下半身"
-                      : w.slot === "feet"
-                        ? "足"
-                        : "装飾";
-            return (
-              <div
-                key={w.id}
-                style={{
-                  padding: 12,
-                  borderRadius: 8,
-                  background: eq
-                    ? "rgba(220, 100, 100, 0.18)"
-                    : "rgba(255,255,255,0.05)",
-                  border: eq
-                    ? "1px solid rgba(255, 160, 160, 0.45)"
-                    : "1px solid rgba(255,255,255,0.1)",
-                }}
+      <div className={styles.panel} onClick={(e) => e.stopPropagation()}>
+        <header className={styles.head}>
+          <div className={styles.headLeft}>
+            <span className={styles.title}>防具屋</span>
+            <span className={styles.subtitle}>
+              防具職人「リーネ」— 防具・装飾の購入　
+              <span className={styles.money}>
+                所持金 {money.toLocaleString()} 円
+              </span>
+            </span>
+          </div>
+          <div className={styles.headRight}>
+            <button
+              type="button"
+              className={styles.close}
+              onClick={onClose}
+              aria-label="閉じる"
+            >
+              ×
+            </button>
+          </div>
+        </header>
+
+        <div className={styles.body}>
+          <aside className={styles.tabs} aria-label="防具の部位">
+            {ARMOR_SHOP_TABS.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                className={`${styles.tab} ${tab === t.id ? styles.tabOn : ""}`}
+                onClick={() => setTab(t.id)}
               >
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    gap: 8,
-                    marginBottom: 4,
-                  }}
-                >
-                  <strong style={{ fontSize: 14 }}>
-                    [{slotLabel}] {w.name}
-                  </strong>
-                  <span style={{ fontSize: 12, color: "#ffe082", fontWeight: 700 }}>
-                    DEF +{w.defBonus}
-                    {w.atkBonus > 0 ? ` / ATK +${w.atkBonus}` : ""}
-                    {w.critBonus > 0 ? ` / CRIT +${w.critBonus}%` : ""}
-                  </span>
-                </div>
-                <p
-                  style={{
-                    margin: "0 0 8px",
-                    fontSize: 12,
-                    lineHeight: 1.45,
-                    color: "#e0d0d0",
-                  }}
-                >
-                  {w.desc}
-                </p>
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    gap: 8,
-                  }}
-                >
-                  <span style={{ fontSize: 12, opacity: 0.8 }}>
-                    {has
-                      ? eq
-                        ? "装備中"
-                        : "所持中"
-                      : w.price <= 0
-                        ? "無料"
-                        : `${w.price.toLocaleString()} 円`}
-                  </span>
-                  {has ? (
-                    <button
-                      type="button"
-                      disabled={eq}
-                      onClick={() => onEquip(w.id, w.name)}
-                      style={{
-                        padding: "7px 12px",
-                        borderRadius: 6,
-                        border: "1px solid rgba(255,255,255,0.22)",
-                        background: eq
-                          ? "rgba(255,255,255,0.08)"
-                          : "linear-gradient(180deg, #b85a5a, #803030)",
-                        color: "#fff",
-                        fontSize: 12,
-                        fontWeight: 800,
-                        cursor: eq ? "default" : "pointer",
-                        opacity: eq ? 0.55 : 1,
-                      }}
-                    >
-                      {eq ? "装備中" : "装備する"}
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => onBuy(w.id)}
-                      style={{
-                        padding: "7px 12px",
-                        borderRadius: 6,
-                        border: "1px solid rgba(255, 180, 140, 0.45)",
-                        background: "linear-gradient(180deg, #c48a3a, #8f5a1e)",
-                        color: "#fff",
-                        fontSize: 12,
-                        fontWeight: 800,
-                        cursor: "pointer",
-                      }}
-                    >
-                      購入する
-                    </button>
-                  )}
-                </div>
-              </div>
-            );
-          })}
+                {t.label}
+              </button>
+            ))}
+          </aside>
+
+          <div className={styles.list}>
+            {list.length === 0 ? (
+              <p className={styles.empty}>この部位の商品はまだありません</p>
+            ) : (
+              list.map((w) => {
+                const has = owned.includes(w.id);
+                const eq = isEquipped(w.id);
+                return (
+                  <div
+                    key={w.id}
+                    className={`${styles.card} ${eq ? styles.cardEq : ""} ${rarityClass(w.rarity)}`}
+                  >
+                    <span className={styles.cardIcon}>{partIcon(w.slot)}</span>
+                    <div className={styles.cardBody}>
+                      <div className={styles.cardTop}>
+                        <span className={styles.cardName}>
+                          <span
+                            className={`${styles.rarityTag} ${rarityTagClass(w.rarity)}`}
+                          >
+                            {w.rarity}
+                          </span>
+                          {w.name}
+                        </span>
+                        <span className={styles.cardStats}>
+                          DEF +{w.defBonus}
+                          {w.atkBonus > 0 ? ` / ATK +${w.atkBonus}` : ""}
+                          {w.critBonus > 0 ? ` / CRIT +${w.critBonus}%` : ""}
+                        </span>
+                      </div>
+                      <p className={styles.cardDesc}>{w.desc}</p>
+                      <div className={styles.cardMeta}>
+                        {partLabel(w.slot)}
+                        {" ／ "}
+                        {has
+                          ? eq
+                            ? "装備中"
+                            : "所持中"
+                          : w.price <= 0
+                            ? "無料"
+                            : `${w.price.toLocaleString()} 円`}
+                      </div>
+                    </div>
+                    <div className={styles.cardActions}>
+                      {has ? (
+                        <button
+                          type="button"
+                          className={`${styles.btn} ${styles.btnEquip}`}
+                          disabled={eq}
+                          onClick={() => onEquip(w.id, w.name)}
+                        >
+                          {eq ? "装備中" : "装備する"}
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          className={`${styles.btn} ${styles.btnBuy}`}
+                          onClick={() => onBuy(w.id)}
+                        >
+                          購入する
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          style={{
-            width: "100%",
-            padding: 11,
-            borderRadius: 8,
-            border: "1px solid rgba(255,255,255,0.22)",
-            background: "rgba(0,0,0,0.35)",
-            color: "#fff",
-            fontSize: 14,
-            fontWeight: 800,
-            cursor: "pointer",
-          }}
-        >
-          とじる
-        </button>
+
+        <footer className={styles.foot}>
+          <span className={styles.footHint}>
+            左のタブで部位・装飾ごとに切り替えられます
+          </span>
+          <button type="button" className={styles.footClose} onClick={onClose}>
+            とじる
+          </button>
+        </footer>
       </div>
     </div>,
     document.body

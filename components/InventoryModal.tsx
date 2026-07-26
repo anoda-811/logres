@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import {
   EQUIP_SLOTS,
   equipGear,
+  formatGearName,
   gearMatchesSlot,
   getCombatPower,
   getGear,
@@ -18,10 +19,18 @@ import {
   type EquipSlot,
   type GearDef,
   type GearKind,
+  type GearRarity,
 } from "../lib/equipment";
+import {
+  getPassiveBonuses,
+  getServerSkillSnapshot,
+  getSkillSnapshot,
+  subscribeSkills,
+} from "../lib/skills";
 import {
   getQuestSnapshot,
   getServerQuestSnapshot,
+  maxHpForLevel,
   subscribeQuests,
 } from "../lib/quests";
 import { pushChatMessage } from "../lib/chatStore";
@@ -60,6 +69,14 @@ function useQuestSnap() {
   );
 }
 
+function useSkillSnap() {
+  return useSyncExternalStore(
+    subscribeSkills,
+    getSkillSnapshot,
+    getServerSkillSnapshot
+  );
+}
+
 function iconFor(kind: GearKind): string {
   switch (kind) {
     case "weapon":
@@ -79,6 +96,25 @@ function iconFor(kind: GearKind): string {
   }
 }
 
+function rarityClass(r: GearRarity): string {
+  return styles[`rarity${r}` as keyof typeof styles] ?? "";
+}
+
+function rarityTagClass(r: GearRarity): string {
+  return styles[`rarityTag${r}` as keyof typeof styles] ?? "";
+}
+
+function RarityName({ gear }: { gear: Pick<GearDef, "name" | "rarity"> }) {
+  return (
+    <>
+      <span className={`${styles.rarityTag} ${rarityTagClass(gear.rarity)}`}>
+        {gear.rarity}
+      </span>
+      {gear.name}
+    </>
+  );
+}
+
 export default function InventoryModal({
   open,
   playerName = "ゆうしゃ",
@@ -86,14 +122,18 @@ export default function InventoryModal({
 }: Props) {
   const { owned, equipped } = useGearSnap();
   const { level } = useQuestSnap();
+  const { deck } = useSkillSnap();
   const [selectedSlot, setSelectedSlot] = useState<EquipSlot>("weapon");
   const [bagTab, setBagTab] = useState<BagTab>("all");
 
-  const atk = getTotalAtkBonus();
+  const passives = getPassiveBonuses(deck);
+  const atk = getTotalAtkBonus() + passives.atk;
   const def = getTotalDefBonus();
-  const crit = getTotalCritRate();
-  const power = getCombatPower();
-  const hp = 40 + def * 2;
+  const crit = getTotalCritRate() + passives.crit;
+  const hit = 100 + passives.hit;
+  const power =
+    getCombatPower() + passives.atk * 12 + passives.crit * 4 + passives.hit * 2;
+  const hp = maxHpForLevel(level) + def * 2;
   const magAtk = Math.floor(atk * 0.4);
   const magDef = Math.floor(def * 0.8);
 
@@ -197,9 +237,9 @@ export default function InventoryModal({
                 <span>魔防</span>
                 <strong>{1 + magDef}</strong>
               </div>
-              <div className={`${styles.statRow} ${styles.muted}`}>
+              <div className={styles.statRow}>
                 <span>命中</span>
-                <strong>100</strong>
+                <strong>{hit}</strong>
               </div>
               <div className={`${styles.statRow} ${styles.muted}`}>
                 <span>回避</span>
@@ -228,12 +268,16 @@ export default function InventoryModal({
                     <button
                       key={slot.id}
                       type="button"
-                      className={`${styles.slotRow} ${on ? styles.slotOn : ""}`}
+                      className={`${styles.slotRow} ${on ? styles.slotOn : ""} ${
+                        gear ? rarityClass(gear.rarity) : ""
+                      }`}
                       onClick={() => setSelectedSlot(slot.id)}
                     >
                       <span className={styles.slotIcon}>{iconFor(slot.kind)}</span>
                       <span className={styles.slotKind}>武器</span>
-                      <span className={styles.slotName}>{gear?.name ?? "（未装備）"}</span>
+                      <span className={styles.slotName}>
+                        {gear ? <RarityName gear={gear} /> : "（未装備）"}
+                      </span>
                       <span className={styles.slotMeta}>
                         {gear
                           ? [
@@ -263,13 +307,17 @@ export default function InventoryModal({
                     <button
                       key={slot.id}
                       type="button"
-                      className={`${styles.slotRow} ${on ? styles.slotOn : ""}`}
+                      className={`${styles.slotRow} ${on ? styles.slotOn : ""} ${
+                        gear ? rarityClass(gear.rarity) : ""
+                      }`}
                       onClick={() => setSelectedSlot(slot.id)}
                       onDoubleClick={() => onUnequip(slot.id)}
                     >
                       <span className={styles.slotIcon}>{iconFor(slot.kind)}</span>
                       <span className={styles.slotKind}>{slot.label}</span>
-                      <span className={styles.slotName}>{gear?.name ?? "（未装備）"}</span>
+                      <span className={styles.slotName}>
+                        {gear ? <RarityName gear={gear} /> : "（未装備）"}
+                      </span>
                       <span className={styles.slotMeta}>
                         {gear
                           ? [
@@ -299,13 +347,17 @@ export default function InventoryModal({
                     <button
                       key={slot.id}
                       type="button"
-                      className={`${styles.accSlot} ${on ? styles.slotOn : ""}`}
+                      className={`${styles.accSlot} ${on ? styles.slotOn : ""} ${
+                        gear ? rarityClass(gear.rarity) : ""
+                      }`}
                       onClick={() => setSelectedSlot(slot.id)}
                       onDoubleClick={() => onUnequip(slot.id)}
-                      title={gear?.name ?? "空き"}
+                      title={gear ? formatGearName(gear) : "空き"}
                     >
                       <span className={styles.slotIcon}>飾</span>
-                      <span className={styles.accName}>{gear?.name ?? "空"}</span>
+                      <span className={styles.accName}>
+                        {gear ? <RarityName gear={gear} /> : "空"}
+                      </span>
                     </button>
                   );
                 })}
@@ -344,12 +396,14 @@ export default function InventoryModal({
                       type="button"
                       className={`${styles.bagItem} ${can ? styles.bagItemCan : ""} ${
                         eqSomewhere ? styles.bagItemEq : ""
-                      }`}
+                      } ${rarityClass(g.rarity)}`}
                       onClick={() => onPick(g)}
                     >
                       <span className={styles.slotIcon}>{iconFor(g.slot)}</span>
                       <span className={styles.bagItemBody}>
-                        <strong>{g.name}</strong>
+                        <strong>
+                          <RarityName gear={g} />
+                        </strong>
                         <small>
                           ATK+{g.atkBonus} / DEF+{g.defBonus}
                           {g.critBonus > 0 ? ` / CRIT+${g.critBonus}%` : ""}

@@ -10,8 +10,17 @@ import {
 } from "react";
 import { getMonster, markMonsterDefeated, resolveBattleMonster } from "../lib/monsters";
 import { getActiveCharacter } from "../lib/characters";
-import { addExp, addMoney, recordMonsterKill } from "../lib/quests";
-import { getTotalAtkBonus, rollCritical } from "../lib/equipment";
+import { addExp, addMoney, getPlayerHp, loadLevel, maxHpForLevel, recordMonsterKill, savePlayerHp } from "../lib/quests";
+import { getTotalAtkBonus, getTotalCritRate, rollCritical } from "../lib/equipment";
+import {
+  getEquippedActiveCommands,
+  getPassiveBonuses,
+  type BattleSkillCommand,
+} from "../lib/skills";
+import {
+  rollAndGrantBattleTreasure,
+  type TreasureDrop,
+} from "../lib/battleLoot";
 import {
   getServerSpeechBubble,
   getSpeechBubble,
@@ -21,17 +30,7 @@ import {
 import { loadBgmEnabled } from "../lib/settings";
 import FieldBgm from "./FieldBgm";
 
-type Command = {
-  id: string;
-  label: string;
-  cost: number;
-  power: number;
-  /** attack = 敵選択時 / self = 自分選択時 */
-  kind: "attack" | "self";
-  desc: string;
-  effect?: string;
-  buff?: "counter" | "revenge" | "powerStance" | "courage" | "charge";
-};
+type Command = BattleSkillCommand;
 
 const MAX_SP = 5;
 
@@ -52,120 +51,6 @@ const SEC_PER_SP = 4.5;
 const PLAYER_SP_RATE = 1 / SEC_PER_SP;
 /** 1秒あたりの敵ゲージ（満タンまで約3.5秒で攻撃） */
 const ENEMY_GAUGE_RATE = 0.28;
-
-/** 敵を選んだときに出す攻撃スキル */
-const ATTACK_SKILLS: Command[] = [
-  {
-    id: "attack",
-    label: "通常攻撃",
-    cost: 0,
-    power: 8,
-    kind: "attack",
-    desc: "選んだ敵に基本攻撃。",
-  },
-  {
-    id: "slash",
-    label: "フルスイング",
-    cost: 1,
-    power: 14,
-    kind: "attack",
-    desc: "SPを1消費する攻撃。",
-    effect: "小〜中威力",
-  },
-  {
-    id: "heavy",
-    label: "キラースマッシュ",
-    cost: 2,
-    power: 22,
-    kind: "attack",
-    desc: "SPを2消費する強攻撃。",
-    effect: "中威力",
-  },
-  {
-    id: "dark",
-    label: "ダークスラッシュ",
-    cost: 2,
-    power: 24,
-    kind: "attack",
-    desc: "闇のオーラをまとい、上から切り下ろす。",
-    effect: "中威力",
-  },
-  {
-    id: "power",
-    label: "バルムンク",
-    cost: 3,
-    power: 32,
-    kind: "attack",
-    desc: "SPを3消費する強攻撃。",
-    effect: "高威力",
-  },
-  {
-    id: "jaeger",
-    label: "ランギィールイェーガー",
-    cost: 5,
-    power: 55,
-    kind: "attack",
-    desc: "SPを5消費する必殺技。高く舞い上がり落下斬りを放つ。",
-    effect: "必殺",
-  },
-];
-
-/** 自分を選んだときに出す強化・反撃など */
-const SELF_SKILLS: Command[] = [
-  {
-    id: "counter",
-    label: "反撃",
-    cost: 2,
-    power: 0,
-    kind: "self",
-    buff: "counter",
-    desc: "敵の攻撃に3回まで反撃する。",
-  },
-  {
-    id: "revenge",
-    label: "復讐",
-    cost: 3,
-    power: 0,
-    kind: "self",
-    buff: "revenge",
-    desc: "敵の攻撃に3回まで強い反撃をする。",
-  },
-  {
-    id: "powerStance",
-    label: "パワースタンス",
-    cost: 0,
-    power: 0,
-    kind: "self",
-    buff: "powerStance",
-    desc: "しばらく攻撃力が上がる。",
-  },
-  {
-    id: "courage",
-    label: "勇気の剣",
-    cost: 0,
-    power: 0,
-    kind: "self",
-    buff: "courage",
-    desc: "HPを少し回復する。",
-  },
-  {
-    id: "charge",
-    label: "パワーチャージ",
-    cost: 1,
-    power: 0,
-    kind: "self",
-    buff: "charge",
-    desc: "次の攻撃の威力を上げる。",
-  },
-  {
-    id: "flee",
-    label: "逃げる",
-    cost: 0,
-    power: 0,
-    kind: "self",
-    desc: "戦闘から離脱してマップへ戻る。",
-  },
-];
 
 type BattleEnemy = {
   /** バトル内の対象ID（複数敵対応用） */
@@ -188,6 +73,7 @@ type Props = {
 
 /** 出現数: コンドルは常に2、それ以外はたまに2 */
 function rollEnemyCount(monsterId: number): number {
+  if (monsterId === 3) return 1;
   if (monsterId === 2) return 2;
   return Math.random() < 0.42 ? 2 : 1;
 }
@@ -240,7 +126,14 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
     return makeEnemyUnits(monster, count, instanceId);
   });
   const enemyCount = enemyUnits.length;
-  const [playerHp, setPlayerHp] = useState(40);
+  const [playerMaxHp, setPlayerMaxHp] = useState(() =>
+    maxHpForLevel(typeof window === "undefined" ? 1 : loadLevel())
+  );
+  const [playerHp, setPlayerHp] = useState(() => {
+    if (typeof window === "undefined") return 40;
+    const max = maxHpForLevel(loadLevel());
+    return Math.max(1, Math.ceil(getPlayerHp(max)));
+  });
   const [playerSp, setPlayerSp] = useState(0);
   const [acting, setActing] = useState(false);
   const [result, setResult] = useState<"win" | "lose" | "flee" | null>(null);
@@ -250,6 +143,7 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
     money: number;
     levelsGained: number;
     level: number;
+    treasure: TreasureDrop[];
   } | null>(null);
   const [fadeOut, setFadeOut] = useState(false);
   const [bgmEnabled] = useState(() =>
@@ -300,21 +194,22 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
   const [skillBanner, setSkillBanner] = useState<{
     side: "player" | "enemy";
     name: string;
+    /** 複数敵時の縦位置（0=上） */
+    slot?: number;
   } | null>(null);
 
   const aliveEnemies = enemyUnits.filter((e) => e.hp > 0);
   const enemies = aliveEnemies;
 
-  const playerMaxHp = 40;
   const spFloor = Math.min(MAX_SP, Math.floor(playerSp));
   /** 次のSPまでの貯まり具合（満タン時は1） */
   const spFrac = playerSp >= MAX_SP ? 1 : playerSp - Math.floor(playerSp);
   const spTone = SP_COLORS[spFloor] ?? SP_COLORS[0];
   const menuSkills =
     menuMode === "attack"
-      ? ATTACK_SKILLS
+      ? getEquippedActiveCommands("attack")
       : menuMode === "self"
-        ? SELF_SKILLS
+        ? getEquippedActiveCommands("self")
         : [];
   const menuOpen = menuMode !== null;
 
@@ -438,10 +333,10 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
     setMenuMode(mode);
     if (mode === "attack") {
       setTargetId(tid);
-      setSelected(ATTACK_SKILLS[0]?.id ?? "attack");
+      setSelected(getEquippedActiveCommands("attack")[0]?.id ?? "attack");
     } else if (mode === "self") {
       setTargetId(null);
-      setSelected(SELF_SKILLS[0]?.id ?? "counter");
+      setSelected(getEquippedActiveCommands("self")[0]?.id ?? "counter");
     } else {
       setTargetId(null);
     }
@@ -466,14 +361,16 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
   };
 
   const goField = () => {
+    savePlayerHp(playerHpRef.current);
     sessionStorage.setItem("resumeField", "1");
-    router.push("/");
+    router.replace("/");
   };
 
-  // 勝利: 戦闘BGM停止 → 勝利曲 → 曲終了で暗転 → マップ
+  // 勝利: 戦闘BGM停止 → 勝利曲 → 約4秒表示のあと暗転 → マップ
   useEffect(() => {
     if (!clearStats) return;
     const fadeMs = 1600;
+    const holdMs = 4000;
     let faded = false;
     let fadeTimer: ReturnType<typeof setTimeout> | null = null;
     let goTimer: ReturnType<typeof setTimeout> | null = null;
@@ -486,8 +383,9 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
       goTimer = setTimeout(goField, fadeMs);
     };
 
+    fadeTimer = setTimeout(startFade, holdMs);
+
     if (!bgmEnabled) {
-      fadeTimer = setTimeout(startFade, 1400);
       return () => {
         if (fadeTimer) clearTimeout(fadeTimer);
         if (goTimer) clearTimeout(goTimer);
@@ -499,26 +397,15 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
     audio.preload = "auto";
     audio.volume = 0.62;
 
-    const onEnded = () => startFade();
-    // 再生失敗・duration不明時の保険
-    const safety = setTimeout(startFade, 12000);
-    audio.addEventListener("ended", onEnded);
-
     const tryPlay = () => {
-      audio!
-        .play()
-        .catch(() => {
-          fadeTimer = setTimeout(startFade, 1400);
-        });
+      audio!.play().catch(() => {});
     };
     if (audio.readyState >= 2) tryPlay();
     else audio.addEventListener("canplay", tryPlay, { once: true });
 
     return () => {
-      clearTimeout(safety);
       if (fadeTimer) clearTimeout(fadeTimer);
       if (goTimer) clearTimeout(goTimer);
-      audio?.removeEventListener("ended", onEnded);
       audio?.pause();
       audio?.removeAttribute("src");
       audio?.load();
@@ -572,9 +459,17 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
   };
 
   const skillBannerTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const showSkillBanner = (side: "player" | "enemy", name: string) => {
+  const showSkillBanner = (
+    side: "player" | "enemy",
+    name: string,
+    slot?: number
+  ) => {
     if (skillBannerTimer.current) clearTimeout(skillBannerTimer.current);
-    setSkillBanner({ side, name });
+    setSkillBanner({
+      side,
+      name,
+      slot: side === "enemy" && enemyCount > 1 ? slot : undefined,
+    });
     skillBannerTimer.current = setTimeout(() => {
       setSkillBanner(null);
       skillBannerTimer.current = null;
@@ -671,12 +566,25 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
     );
     const expGain = monster.expReward * enemyCount;
     const moneyGain = monster.moneyReward * enemyCount;
+    const treasure = rollAndGrantBattleTreasure(monster, enemyCount);
     const leveled = addExp(expGain);
     addMoney(moneyGain);
+    for (const drop of treasure) {
+      if (drop.gearId) {
+        pushBattleLog(`${drop.name} を手に入れた！`);
+      }
+    }
     if (leveled.levelsGained > 0) {
       pushBattleLog(
         `レベルが ${leveled.level} にあがった！`
       );
+      const nextMax = maxHpForLevel(leveled.level);
+      const gained = Math.max(0, nextMax - playerMaxHp);
+      const nextHp = Math.min(nextMax, playerHpRef.current + gained);
+      setPlayerMaxHp(nextMax);
+      setPlayerHp(nextHp);
+      playerHpRef.current = nextHp;
+      savePlayerHp(nextHp);
     }
     setTimeout(() => {
       setPlayerMotion("idle");
@@ -686,6 +594,7 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
         money: moneyGain,
         levelsGained: leveled.levelsGained,
         level: leveled.level,
+        treasure,
       });
       setMenuOpenMode(null);
       setDamagePopup(null);
@@ -762,7 +671,7 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
     setNearEnemyId(attacker.battleId);
     nearEnemyIdRef.current = attacker.battleId;
     const enemySkill = pickEnemySkillName();
-    showSkillBanner("enemy", enemySkill);
+    showSkillBanner("enemy", enemySkill, attacker.slot);
 
     setTimeout(() => {
       if (resultRef.current || !anyEnemyAlive()) {
@@ -804,9 +713,16 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
 
         setTimeout(() => {
           if (resultRef.current || !anyEnemyAlive()) return;
-          const retaliate =
+          const passives = getPassiveBonuses();
+          let retaliate =
             (rank >= 2 ? attacker.atk * 2 + 6 : attacker.atk + 4) +
+            getTotalAtkBonus() +
+            passives.atk +
             Math.floor(Math.random() * 3);
+          const killerPct = passives.killers[monster.race] ?? 0;
+          if (killerPct > 0) {
+            retaliate = Math.round(retaliate * (1 + killerPct / 100));
+          }
           const { allDead } = dealDamageToEnemy(retaliate, {
             label: counterName,
             atNear: true,
@@ -991,6 +907,7 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
     let dmg =
       cmd.power +
       getTotalAtkBonus() +
+      getPassiveBonuses().atk +
       (atkBuffHitsRef.current > 0 ? atkBuffValueRef.current : 0) +
       Math.floor(Math.random() * 4);
     if (chargedRef.current) {
@@ -1000,7 +917,23 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
     if (atkBuffHitsRef.current > 0) {
       setAtkBuffHits((n) => Math.max(0, n - 1));
     }
-    const critical = rollCritical();
+    // 種族キラー
+    const passives = getPassiveBonuses();
+    const targetUnit = enemyUnitsRef.current.find(
+      (e) => e.battleId === attackTargetId
+    );
+    const targetRace = targetUnit
+      ? getMonster(targetUnit.monsterId).race
+      : monster.race;
+    const killerPct = passives.killers[targetRace] ?? 0;
+    if (killerPct > 0) {
+      dmg = Math.round(dmg * (1 + killerPct / 100));
+    }
+    // 命中ボーナスはごく軽いダメージ補正、クリはパッシブ加算
+    if (passives.hit > 0) {
+      dmg += Math.floor(passives.hit / 5);
+    }
+    const critical = rollCritical(getTotalCritRate() + passives.crit);
     if (critical) {
       dmg = Math.max(dmg + 1, Math.round(dmg * 1.5));
     }
@@ -1127,24 +1060,74 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
         {clearStats && (
           <>
             <div className="lr-clear">
-              <div className="lr-clear-row" style={{ animationDelay: "0.15s" }}>
+              <div
+                className="lr-clear-row"
+                style={{ animationDelay: "0.08s", ["--lr-step" as string]: 0 }}
+              >
                 <span className="lr-clear-label">Time</span>
                 <span className="lr-clear-value">
                   {formatBattleTime(clearStats.timeMs)}
                 </span>
               </div>
-              <div className="lr-clear-row" style={{ animationDelay: "0.55s" }}>
+              <div
+                className="lr-clear-row"
+                style={{ animationDelay: "0.26s", ["--lr-step" as string]: 1 }}
+              >
                 <span className="lr-clear-label">Exp</span>
                 <span className="lr-clear-value">{clearStats.exp}</span>
               </div>
-              <div className="lr-clear-row" style={{ animationDelay: "0.95s" }}>
+              <div
+                className="lr-clear-row"
+                style={{ animationDelay: "0.44s", ["--lr-step" as string]: 2 }}
+              >
                 <span className="lr-clear-label">Poro</span>
                 <span className="lr-clear-value">{clearStats.money}</span>
               </div>
+              <div
+                className="lr-clear-row"
+                style={{ animationDelay: "0.62s", ["--lr-step" as string]: 3 }}
+              >
+                <span className="lr-clear-label">Treasure</span>
+                <span className="lr-clear-value">
+                  {clearStats.treasure.reduce((n, d) => n + d.qty, 0)}
+                </span>
+              </div>
+              {clearStats.treasure.length > 0 && (
+                <div
+                  className="lr-clear-treasure"
+                  style={{
+                    animationDelay: "0.76s",
+                    ["--lr-step" as string]: 3,
+                  }}
+                >
+                  <ul className="lr-clear-treasure-list">
+                    {clearStats.treasure.map((drop, i) => (
+                      <li
+                        key={drop.id}
+                        className="lr-clear-treasure-item"
+                        style={{
+                          color: drop.color,
+                          ["--lr-item-step" as string]: i,
+                        }}
+                      >
+                        <span className="lr-clear-treasure-line">
+                          {drop.name}&nbsp;{drop.qty}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                  <span className="lr-clear-treasure-more" aria-hidden>
+                    ▼
+                  </span>
+                </div>
+              )}
               {clearStats.levelsGained > 0 && (
                 <div
                   className="lr-clear-row lr-clear-levelup"
-                  style={{ animationDelay: "1.35s" }}
+                  style={{
+                    animationDelay: "0.96s",
+                    ["--lr-step" as string]: 4,
+                  }}
                 >
                   <span className="lr-clear-label">Level</span>
                   <span className="lr-clear-value">
@@ -1365,7 +1348,21 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
       {/* 技名バナー（ログレス風） */}
       {skillBanner && (
         <div
-          className={`lr-skill-banner ${skillBanner.side === "enemy" ? "enemy" : "player"}`}
+          className={`lr-skill-banner ${
+            skillBanner.side === "enemy" ? "enemy" : "player"
+          }${
+            skillBanner.side === "enemy" &&
+            skillBanner.slot === 0 &&
+            enemyCount > 1
+              ? " slot-0"
+              : ""
+          }${
+            skillBanner.side === "enemy" &&
+            skillBanner.slot === 1 &&
+            enemyCount > 1
+              ? " slot-1"
+              : ""
+          }`}
           aria-hidden
         >
           {skillBanner.name}

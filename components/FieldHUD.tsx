@@ -4,11 +4,13 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import SettingsModal from "./SettingsModal";
 import InventoryModal from "./InventoryModal";
+import SkillMenuModal from "./SkillMenuModal";
 import {
   getQuestDef,
   getQuestSnapshot,
   getServerQuestSnapshot,
   subscribeQuests,
+  tickPlayerHpRegen,
 } from "../lib/quests";
 
 type SideId = "world" | "bag" | "skill" | "quest" | "guild" | "gacha";
@@ -30,7 +32,7 @@ const SIDE_ITEMS: { id: SideId; label: string; title: string; body: string }[] =
     id: "skill",
     label: "スキル",
     title: "スキル",
-    body: "習得スキルの確認・セットはここ。戦闘のスキルとは別枠の予定。",
+    body: "",
   },
   {
     id: "quest",
@@ -61,6 +63,8 @@ type Props = {
   playerName?: string;
   bgmEnabled?: boolean;
   onToggleBgm?: () => void;
+  sfxEnabled?: boolean;
+  onToggleSfx?: () => void;
 };
 
 function useQuestSnap() {
@@ -74,12 +78,14 @@ function useQuestSnap() {
 export default function FieldHUD({
   onReturnTitle,
   onOpenWorldMap,
-  hp = 40,
-  maxHp = 40,
-  locationName = "草原フィールド",
+  hp,
+  maxHp,
+  locationName = "キルギム草原 - 始まりの草原",
   playerName = "ゆうしゃ",
   bgmEnabled = true,
   onToggleBgm,
+  sfxEnabled = true,
+  onToggleSfx,
 }: Props) {
   const [mounted, setMounted] = useState(false);
   const [hoverId, setHoverId] = useState<SideId | null>(null);
@@ -87,9 +93,21 @@ export default function FieldHUD({
   const [menuOpen, setMenuOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [inventoryOpen, setInventoryOpen] = useState(false);
-  const { money, quests, level, exp, maxExp } = useQuestSnap();
+  const [skillOpen, setSkillOpen] = useState(false);
+  const { money, quests, level, exp, maxExp, maxHp: levelMaxHp, hp: storedHp } =
+    useQuestSnap();
+  const displayMaxHp = maxHp ?? levelMaxHp;
+  const displayHp = hp ?? Math.ceil(storedHp);
 
   useEffect(() => setMounted(true), []);
+
+  // フィールド滞在中は時間経過でHP自然回復
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      tickPlayerHpRegen();
+    }, 500);
+    return () => window.clearInterval(id);
+  }, []);
 
   const activeId = pinnedId ?? hoverId;
   const active = SIDE_ITEMS.find((s) => s.id === activeId) ?? null;
@@ -131,15 +149,29 @@ export default function FieldHUD({
               key={item.id}
               type="button"
               className={`fh-side-tab ${
-                activeId === item.id || (item.id === "bag" && inventoryOpen)
+                activeId === item.id ||
+                (item.id === "bag" && inventoryOpen) ||
+                (item.id === "skill" && skillOpen)
                   ? "is-active"
                   : ""
               }`}
               onMouseEnter={() => {
-                if (item.id !== "world" && item.id !== "bag") setHoverId(item.id);
+                if (
+                  item.id !== "world" &&
+                  item.id !== "bag" &&
+                  item.id !== "skill"
+                ) {
+                  setHoverId(item.id);
+                }
               }}
               onFocus={() => {
-                if (item.id !== "world" && item.id !== "bag") setHoverId(item.id);
+                if (
+                  item.id !== "world" &&
+                  item.id !== "bag" &&
+                  item.id !== "skill"
+                ) {
+                  setHoverId(item.id);
+                }
               }}
               onClick={() => {
                 if (item.id === "world") {
@@ -154,6 +186,12 @@ export default function FieldHUD({
                   setInventoryOpen(true);
                   return;
                 }
+                if (item.id === "skill") {
+                  setPinnedId(null);
+                  setHoverId(null);
+                  setSkillOpen(true);
+                  return;
+                }
                 setPinnedId((cur) => (cur === item.id ? null : item.id));
               }}
             >
@@ -161,7 +199,10 @@ export default function FieldHUD({
             </button>
           ))}
         </div>
-        {active && active.id !== "world" && active.id !== "bag" && (
+        {active &&
+          active.id !== "world" &&
+          active.id !== "bag" &&
+          active.id !== "skill" && (
           <div className="fh-side-panel">
             <h3>{active.title}</h3>
             {active.id === "quest" ? (
@@ -232,10 +273,10 @@ export default function FieldHUD({
             <div className="fh-bar hp">
               <div
                 className="fh-bar-fill"
-                style={{ width: `${Math.min(100, (hp / maxHp) * 100)}%` }}
+                style={{ width: `${Math.min(100, (displayHp / displayMaxHp) * 100)}%` }}
               />
               <span className="fh-bar-num">
-                {hp} / {maxHp}
+                {displayHp} / {displayMaxHp}
               </span>
             </div>
           </div>
@@ -318,6 +359,8 @@ export default function FieldHUD({
         open={settingsOpen}
         bgmEnabled={bgmEnabled}
         onToggleBgm={() => onToggleBgm?.()}
+        sfxEnabled={sfxEnabled}
+        onToggleSfx={() => onToggleSfx?.()}
         onClose={() => setSettingsOpen(false)}
       />
       <InventoryModal
@@ -325,6 +368,7 @@ export default function FieldHUD({
         playerName={playerName}
         onClose={() => setInventoryOpen(false)}
       />
+      <SkillMenuModal open={skillOpen} onClose={() => setSkillOpen(false)} />
     </>
   );
 }

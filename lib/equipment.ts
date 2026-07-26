@@ -37,16 +37,60 @@ export const EQUIP_SLOTS: {
   { id: "acc3", label: "装飾品", group: "acc", kind: "accessory" },
 ];
 
+/** レア度: R=青 / SR=紫 / UR=金 / LR=赤 */
+export type GearRarity = "R" | "SR" | "UR" | "LR";
+
+export const GEAR_RARITY_META: Record<
+  GearRarity,
+  { label: string; color: string }
+> = {
+  R: { label: "R", color: "#5b9fff" },
+  SR: { label: "SR", color: "#c084fc" },
+  UR: { label: "UR", color: "#f0d878" },
+  LR: { label: "LR", color: "#ff6b6b" },
+};
+
+export function formatGearName(
+  gear: Pick<GearDef, "name" | "rarity">
+): string {
+  return `${gear.rarity} ${gear.name}`;
+}
+
+/** 武器の系統 */
+export type WeaponGenre = "sword" | "hammer" | "dagger" | "spear";
+
+export const WEAPON_GENRES: { id: WeaponGenre | "all"; label: string }[] = [
+  { id: "all", label: "すべて" },
+  { id: "sword", label: "剣" },
+  { id: "hammer", label: "槌" },
+  { id: "dagger", label: "短剣" },
+  { id: "spear", label: "槍" },
+];
+
+/** 防具屋の部位タブ */
+export const ARMOR_SHOP_TABS: { id: GearKind | "all"; label: string }[] = [
+  { id: "all", label: "すべて" },
+  { id: "head", label: "頭" },
+  { id: "body", label: "上半身" },
+  { id: "arms", label: "手" },
+  { id: "waist", label: "下半身" },
+  { id: "feet", label: "足" },
+  { id: "accessory", label: "装飾" },
+];
+
 export type GearDef = {
   id: string;
   name: string;
   desc: string;
   slot: GearKind;
+  rarity: GearRarity;
   atkBonus: number;
   defBonus: number;
   /** クリティカル率への加算（％ポイント） */
   critBonus: number;
   price: number;
+  /** 武器ジャンル（武器屋タブ用） */
+  weaponGenre?: WeaponGenre;
 };
 
 /** 裸のときの基本クリティカル率（％） */
@@ -59,6 +103,8 @@ export const WEAPONS: GearDef[] = [
     name: "木の剣",
     desc: "冒険のはじめの一本。",
     slot: "weapon",
+    weaponGenre: "sword",
+    rarity: "R",
     atkBonus: 0,
     defBonus: 0,
     critBonus: 0,
@@ -69,6 +115,8 @@ export const WEAPONS: GearDef[] = [
     name: "鉄の剣",
     desc: "普通の鉄剣。安定した切れ味。",
     slot: "weapon",
+    weaponGenre: "sword",
+    rarity: "R",
     atkBonus: 3,
     defBonus: 0,
     critBonus: 1,
@@ -79,20 +127,72 @@ export const WEAPONS: GearDef[] = [
     name: "鋼の剣",
     desc: "よく研がれた鋼の剣。",
     slot: "weapon",
+    weaponGenre: "sword",
+    rarity: "UR",
     atkBonus: 6,
     defBonus: 0,
     critBonus: 2,
     price: 120,
   },
   {
+    id: "hakugeki",
+    name: "白撃の剣",
+    desc: "白き蹄の気配を宿すUR剣。秘境のボスが落とすという。",
+    slot: "weapon",
+    weaponGenre: "sword",
+    rarity: "UR",
+    atkBonus: 14,
+    defBonus: 0,
+    critBonus: 4,
+    price: 0,
+  },
+  {
     id: "hammer",
     name: "大槌",
     desc: "鍛冶屋自慢の重いハンマー。",
     slot: "weapon",
+    weaponGenre: "hammer",
+    rarity: "SR",
     atkBonus: 5,
     defBonus: 0,
     critBonus: 3,
     price: 80,
+  },
+  {
+    id: "dagger_iron",
+    name: "鉄の短剣",
+    desc: "素早い一撃向けの短剣。",
+    slot: "weapon",
+    weaponGenre: "dagger",
+    rarity: "R",
+    atkBonus: 2,
+    defBonus: 0,
+    critBonus: 4,
+    price: 45,
+  },
+  {
+    id: "spear_wood",
+    name: "木の槍",
+    desc: "リーチのある木製の槍。",
+    slot: "weapon",
+    weaponGenre: "spear",
+    rarity: "SR",
+    atkBonus: 4,
+    defBonus: 0,
+    critBonus: 1,
+    price: 65,
+  },
+  {
+    id: "blade_legend",
+    name: "伝説の剣",
+    desc: "語り継がれる一振り。",
+    slot: "weapon",
+    weaponGenre: "sword",
+    rarity: "LR",
+    atkBonus: 12,
+    defBonus: 0,
+    critBonus: 5,
+    price: 500,
   },
 ];
 
@@ -103,6 +203,7 @@ export const ARMORS: GearDef[] = [
     name: "布の帽子",
     desc: "やわらかい布の帽子。",
     slot: "head",
+    rarity: "R",
     atkBonus: 0,
     defBonus: 1,
     critBonus: 0,
@@ -113,6 +214,7 @@ export const ARMORS: GearDef[] = [
     name: "皮の帽子",
     desc: "少し硬い皮製の帽子。",
     slot: "head",
+    rarity: "SR",
     atkBonus: 0,
     defBonus: 3,
     critBonus: 0,
@@ -123,6 +225,7 @@ export const ARMORS: GearDef[] = [
     name: "旅人の服",
     desc: "動きやすい普段着。",
     slot: "body",
+    rarity: "R",
     atkBonus: 0,
     defBonus: 1,
     critBonus: 0,
@@ -133,6 +236,7 @@ export const ARMORS: GearDef[] = [
     name: "皮の胴当て",
     desc: "軽い皮の防具。",
     slot: "body",
+    rarity: "SR",
     atkBonus: 0,
     defBonus: 4,
     critBonus: 0,
@@ -143,6 +247,7 @@ export const ARMORS: GearDef[] = [
     name: "布の腕巻き",
     desc: "手首を守る布。",
     slot: "arms",
+    rarity: "R",
     atkBonus: 0,
     defBonus: 1,
     critBonus: 0,
@@ -153,6 +258,7 @@ export const ARMORS: GearDef[] = [
     name: "皮の手袋",
     desc: "握りやすい皮手袋。",
     slot: "arms",
+    rarity: "R",
     atkBonus: 0,
     defBonus: 2,
     critBonus: 1,
@@ -160,9 +266,10 @@ export const ARMORS: GearDef[] = [
   },
   {
     id: "belt_rope",
-    name: "旅人のズボン",
+    name: "旅人のツボン",
     desc: "動きやすい下半身装備。",
     slot: "waist",
+    rarity: "R",
     atkBonus: 0,
     defBonus: 1,
     critBonus: 0,
@@ -170,9 +277,10 @@ export const ARMORS: GearDef[] = [
   },
   {
     id: "belt_leather",
-    name: "皮のズボン",
-    desc: "少し硬い皮のズボン。",
+    name: "皮のツボン",
+    desc: "少し硬い皮のツボン。",
     slot: "waist",
+    rarity: "R",
     atkBonus: 0,
     defBonus: 2,
     critBonus: 0,
@@ -183,6 +291,7 @@ export const ARMORS: GearDef[] = [
     name: "布の靴",
     desc: "歩きやすい靴。",
     slot: "feet",
+    rarity: "R",
     atkBonus: 0,
     defBonus: 1,
     critBonus: 0,
@@ -193,6 +302,7 @@ export const ARMORS: GearDef[] = [
     name: "皮のブーツ",
     desc: "硬い皮のブーツ。",
     slot: "feet",
+    rarity: "SR",
     atkBonus: 0,
     defBonus: 3,
     critBonus: 0,
@@ -203,6 +313,7 @@ export const ARMORS: GearDef[] = [
     name: "銅の指輪",
     desc: "ごく普通の指輪。",
     slot: "accessory",
+    rarity: "R",
     atkBonus: 0,
     defBonus: 1,
     critBonus: 0,
@@ -213,6 +324,7 @@ export const ARMORS: GearDef[] = [
     name: "力の指輪",
     desc: "わずかに攻撃力が上がる。",
     slot: "accessory",
+    rarity: "UR",
     atkBonus: 2,
     defBonus: 0,
     critBonus: 2,
@@ -223,6 +335,7 @@ export const ARMORS: GearDef[] = [
     name: "木のアミュレット",
     desc: "護符の一種。",
     slot: "accessory",
+    rarity: "R",
     atkBonus: 0,
     defBonus: 1,
     critBonus: 1,
@@ -233,10 +346,22 @@ export const ARMORS: GearDef[] = [
     name: "しあわせのお守り",
     desc: "クリティカルが出やすくなるお守り。",
     slot: "accessory",
+    rarity: "SR",
     atkBonus: 0,
     defBonus: 0,
     critBonus: 5,
     price: 15,
+  },
+  {
+    id: "crown_hero",
+    name: "英雄の冠",
+    desc: "古の英雄が身につけたといわれる冠。",
+    slot: "head",
+    rarity: "LR",
+    atkBonus: 2,
+    defBonus: 8,
+    critBonus: 3,
+    price: 480,
   },
 ];
 

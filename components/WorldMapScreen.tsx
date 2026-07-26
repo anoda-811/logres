@@ -1,7 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { WORLD_AREAS, type AreaId, type WorldArea } from "../lib/locations";
+import {
+  WORLD_MAP_NODES,
+  worldMapPresenceId,
+  type AreaId,
+  type WorldMapNode,
+} from "../lib/locations";
 import styles from "./WorldMapScreen.module.css";
 
 type Props = {
@@ -16,7 +21,8 @@ export default function WorldMapScreen({
   onClose,
   onTravel,
 }: Props) {
-  const [selected, setSelected] = useState<WorldArea | null>(null);
+  const [selected, setSelected] = useState<WorldMapNode | null>(null);
+  const presenceId = worldMapPresenceId(currentAreaId);
 
   return (
     <div className={styles.root} role="dialog" aria-label="ワールドマップ">
@@ -29,8 +35,8 @@ export default function WorldMapScreen({
             draggable={false}
           />
 
-          {WORLD_AREAS.map((area) => {
-            const here = currentAreaId != null && area.id === currentAreaId;
+          {WORLD_MAP_NODES.map((area) => {
+            const here = presenceId != null && area.id === presenceId;
             const isSelected = selected?.id === area.id;
             return (
               <button
@@ -77,17 +83,15 @@ export default function WorldMapScreen({
               <button
                 type="button"
                 className={styles.goBtn}
-                disabled={
-                  currentAreaId != null && selected.id === currentAreaId
-                }
+                disabled={presenceId != null && selected.id === presenceId}
                 onClick={() => {
-                  if (currentAreaId != null && selected.id === currentAreaId) {
+                  if (presenceId != null && selected.id === presenceId) {
                     return;
                   }
                   onTravel(selected.id);
                 }}
               >
-                {currentAreaId != null && selected.id === currentAreaId
+                {presenceId != null && selected.id === presenceId
                   ? "すでにここにいます"
                   : "移動する"}
               </button>

@@ -1,7 +1,8 @@
 // 既存コード互換の薄いラッパー
-export type { GearDef as WeaponDef } from "./equipment";
+export type { GearDef as WeaponDef, WeaponGenre, GearRarity } from "./equipment";
 export {
   WEAPONS,
+  WEAPON_GENRES,
   getWeapon,
   loadOwnedWeapons,
   loadEquippedWeaponId,
@@ -12,4 +13,5 @@ export {
   subscribeWeapons,
   getWeaponSnapshot,
   getServerWeaponSnapshot,
+  formatGearName,
 } from "./equipment";

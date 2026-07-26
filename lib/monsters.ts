@@ -1,15 +1,27 @@
+import type { MonsterRace } from "./skills";
+
 export type MonsterDef = {
   id: number;
   name: string;
   maxHp: number;
   atk: number;
   image: string;
-  /** フィールド表示レベル */
+  /** フィールド表示レベル（hideLevel 時は ???） */
   level: number;
   /** 討伐時の経験値 */
   expReward: number;
   /** 討伐時のお金（円） */
   moneyReward: number;
+  /** 種族（キラーパッシブ用） */
+  race: MonsterRace;
+  /** フィールドでレベルを ??? 表示 */
+  hideLevel?: boolean;
+  /** フィールドで動かない */
+  immobile?: boolean;
+  /** フィールド描画のタイル換算サイズ（既定1） */
+  fieldTileSpan?: number;
+  /** ボス（専用配置） */
+  boss?: boolean;
 };
 
 export const MONSTERS: Record<number, MonsterDef> = {
@@ -22,6 +34,7 @@ export const MONSTERS: Record<number, MonsterDef> = {
     level: 2,
     expReward: 8,
     moneyReward: 5,
+    race: "slime",
   },
   2: {
     id: 2,
@@ -32,6 +45,22 @@ export const MONSTERS: Record<number, MonsterDef> = {
     level: 3,
     expReward: 18,
     moneyReward: 12,
+    race: "bird",
+  },
+  3: {
+    id: 3,
+    name: "ホワイトケルピー",
+    maxHp: 280,
+    atk: 22,
+    image: "/white-kelpie.png",
+    level: 50,
+    expReward: 120,
+    moneyReward: 80,
+    race: "beast",
+    hideLevel: true,
+    immobile: true,
+    fieldTileSpan: 4,
+    boss: true,
   },
 };
 
@@ -61,11 +90,15 @@ export const FIELD_MONSTER_SPAWNS: FieldMonsterSpawn[] = [
   { instanceId: "condor-d", id: 2, name: "コンドル" },
 ];
 
+export const KELPIE_INSTANCE_ID = "kelpie-boss";
+
 /** 互換用（固定座標は使わない） */
 export const DEFAULT_FIELD_MONSTERS: FieldMonster[] = [];
 
 /** 倒してから復活するまでの時間（ミリ秒） */
 export const MONSTER_RESPAWN_MS = 8_000;
+/** ボス復活時間 */
+export const BOSS_RESPAWN_MS = 120_000;
 
 const DEFEATED_KEY = "defeatedMonstersUntil";
 
@@ -82,11 +115,38 @@ export function resolveBattleMonster(
   monsterId: string | null,
   instanceId: string | null
 ): MonsterDef {
+  if (instanceId === KELPIE_INSTANCE_ID) return getMonster(3);
   if (instanceId) {
     const spawn = FIELD_MONSTER_SPAWNS.find((s) => s.instanceId === instanceId);
     if (spawn) return getMonster(spawn.id);
   }
   return getMonster(monsterId);
+}
+
+export function markMonsterDefeated(instanceId: string, now = Date.now()) {
+  const map = readDefeatUntilMap();
+  const def = resolveBattleMonster(null, instanceId);
+  const ms = def.boss ? BOSS_RESPAWN_MS : MONSTER_RESPAWN_MS;
+  map[instanceId] = now + ms;
+  writeDefeatUntilMap(map);
+}
+
+/** 秘境入り口のボス配置（倒されているときは空） */
+export function createSecretBossMonster(
+  pos: { col: number; row: number },
+  now = Date.now()
+): FieldMonster[] {
+  if (getActiveDefeats(now).has(KELPIE_INSTANCE_ID)) return [];
+  const def = MONSTERS[3];
+  return [
+    {
+      instanceId: KELPIE_INSTANCE_ID,
+      id: def.id,
+      name: def.name,
+      col: pos.col,
+      row: pos.row,
+    },
+  ];
 }
 
 export function readDefeatUntilMap(): DefeatUntilMap {
@@ -119,12 +179,6 @@ export function getActiveDefeats(now = Date.now()): Set<string> {
   }
   if (changed) writeDefeatUntilMap(map);
   return active;
-}
-
-export function markMonsterDefeated(instanceId: string, now = Date.now()) {
-  const map = readDefeatUntilMap();
-  map[instanceId] = now + MONSTER_RESPAWN_MS;
-  writeDefeatUntilMap(map);
 }
 
 export type Cell = { col: number; row: number };

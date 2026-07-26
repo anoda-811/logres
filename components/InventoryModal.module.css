@@ -282,6 +282,36 @@
   box-shadow: 0 0 0 1px rgba(212, 180, 106, 0.15);
 }
 
+.slotRow.rarityR:not(.slotOn) {
+  border-color: rgba(91, 159, 255, 0.7);
+  box-shadow: inset 0 0 0 1px rgba(91, 159, 255, 0.15);
+}
+.slotRow.raritySR:not(.slotOn) {
+  border-color: rgba(192, 132, 252, 0.75);
+  box-shadow: inset 0 0 0 1px rgba(192, 132, 252, 0.18);
+}
+.slotRow.rarityUR:not(.slotOn) {
+  border-color: rgba(240, 216, 120, 0.8);
+  box-shadow: inset 0 0 0 1px rgba(240, 216, 120, 0.2);
+}
+.slotRow.rarityLR:not(.slotOn) {
+  border-color: rgba(255, 107, 107, 0.85);
+  box-shadow: inset 0 0 0 1px rgba(255, 107, 107, 0.22);
+}
+
+.accSlot.rarityR {
+  border-color: rgba(91, 159, 255, 0.7);
+}
+.accSlot.raritySR {
+  border-color: rgba(192, 132, 252, 0.75);
+}
+.accSlot.rarityUR {
+  border-color: rgba(240, 216, 120, 0.8);
+}
+.accSlot.rarityLR {
+  border-color: rgba(255, 107, 107, 0.85);
+}
+
 .slotIcon {
   width: 30px;
   height: 30px;
@@ -479,6 +509,52 @@
 .bagItemEq {
   background: rgba(70, 120, 70, 0.18);
   border-color: rgba(120, 200, 140, 0.35);
+}
+
+/* レア度枠 */
+.rarityR {
+  border-color: rgba(91, 159, 255, 0.75) !important;
+  box-shadow:
+    inset 0 0 0 1px rgba(91, 159, 255, 0.2),
+    0 0 10px rgba(91, 159, 255, 0.12);
+}
+.raritySR {
+  border-color: rgba(192, 132, 252, 0.8) !important;
+  box-shadow:
+    inset 0 0 0 1px rgba(192, 132, 252, 0.22),
+    0 0 12px rgba(192, 132, 252, 0.16);
+}
+.rarityUR {
+  border-color: rgba(240, 216, 120, 0.85) !important;
+  box-shadow:
+    inset 0 0 0 1px rgba(240, 216, 120, 0.25),
+    0 0 14px rgba(240, 216, 120, 0.2);
+}
+.rarityLR {
+  border-color: rgba(255, 107, 107, 0.9) !important;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 107, 107, 0.28),
+    0 0 16px rgba(255, 90, 90, 0.22);
+}
+
+.rarityTag {
+  display: inline-block;
+  min-width: 1.6em;
+  margin-right: 4px;
+  font-weight: 900;
+  letter-spacing: 0.02em;
+}
+.rarityTagR {
+  color: #7eb6ff;
+}
+.rarityTagSR {
+  color: #d4a8ff;
+}
+.rarityTagUR {
+  color: #ffe08a;
+}
+.rarityTagLR {
+  color: #ff8a8a;
 }
 
 .bagItemBody {

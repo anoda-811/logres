@@ -7,6 +7,8 @@ type Props = {
   open: boolean;
   bgmEnabled: boolean;
   onToggleBgm: () => void;
+  sfxEnabled: boolean;
+  onToggleSfx: () => void;
   onClose: () => void;
 };
 
@@ -14,6 +16,8 @@ export default function SettingsModal({
   open,
   bgmEnabled,
   onToggleBgm,
+  sfxEnabled,
+  onToggleSfx,
   onClose,
 }: Props) {
   if (!open || typeof document === "undefined") return null;
@@ -39,6 +43,16 @@ export default function SettingsModal({
             onClick={onToggleBgm}
           >
             {bgmEnabled ? "ON" : "OFF"}
+          </button>
+        </div>
+        <div className={styles.row}>
+          <span className={styles.label}>効果音</span>
+          <button
+            type="button"
+            className={`${styles.toggle} ${sfxEnabled ? styles.toggleOn : ""}`}
+            onClick={onToggleSfx}
+          >
+            {sfxEnabled ? "ON" : "OFF"}
           </button>
         </div>
         <button type="button" className={styles.close} onClick={onClose}>
