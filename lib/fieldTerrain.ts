@@ -5,6 +5,78 @@ export const FIELD_ROWS = 36;
 /** タイルが大きいほど画面に入るマスが減り、寄り気味になる */
 export const FIELD_TILE_W = 78;
 
+/** ワールドマップ境界の青い丸の並び幅（＝通路幅） */
+const GATE_WIDTH = 5;
+
+export type FieldGate = {
+  /** 草原入場時の初期位置（境界の内側） */
+  spawn: { col: number; row: number };
+  /** 青い丸を置くマス */
+  markers: { col: number; row: number }[];
+  /** ここへ踏み出すとワールドマップへ */
+  exits: { col: number; row: number }[];
+  /** 障害物を置かないマス（平地通路） */
+  clearSet: Set<string>;
+  /** 崖で挟む通路の列範囲 */
+  passageMinCol: number;
+  passageMaxCol: number;
+  /** この行以降を入り口の崖帯にする */
+  cliffRowStart: number;
+};
+
+/** マップ手前（画面下）端のワールドマップ入り口 */
+export function getFieldGate(cols: number, rows: number): FieldGate {
+  const mid = Math.floor(cols / 2);
+  const half = Math.floor(GATE_WIDTH / 2);
+  const passageMinCol = Math.max(1, mid - half);
+  const passageMaxCol = Math.min(cols - 2, mid + half);
+  const markerRow = rows - 3;
+  const exitRow = rows - 2;
+  const spawnRow = Math.max(1, rows - 5);
+  const cliffRowStart = rows - 7;
+  const markers: { col: number; row: number }[] = [];
+  const exits: { col: number; row: number }[] = [];
+  const clearSet = new Set<string>();
+
+  const mark = (c: number, r: number) => {
+    if (c < 0 || r < 0 || c >= cols || r >= rows) return;
+    clearSet.add(`${c},${r}`);
+  };
+
+  for (let c = passageMinCol; c <= passageMaxCol; c++) {
+    markers.push({ col: c, row: markerRow });
+    exits.push({ col: c, row: exitRow });
+    if (exitRow + 1 < rows) exits.push({ col: c, row: exitRow + 1 });
+  }
+
+  // 崖帯内は青い丸と同じ幅だけの通路
+  for (let r = cliffRowStart; r < rows; r++) {
+    for (let c = passageMinCol; c <= passageMaxCol; c++) {
+      mark(c, r);
+    }
+  }
+
+  // 崖帯の先は少しずつ広がってフィールドへ出られる
+  const flareTop = Math.floor(rows * 0.5);
+  for (let r = flareTop; r < cliffRowStart; r++) {
+    const t = (cliffRowStart - r) / Math.max(1, cliffRowStart - flareTop);
+    const w = half + Math.floor(t * 3);
+    for (let c = mid - w; c <= mid + w; c++) {
+      mark(c, r);
+    }
+  }
+
+  return {
+    spawn: { col: mid, row: spawnRow },
+    markers,
+    exits,
+    clearSet,
+    passageMinCol,
+    passageMaxCol,
+    cliffRowStart,
+  };
+}
+
 /** 簡易ハッシュノイズ 0..1 */
 export function hash2(c: number, r: number, seed = 7): number {
   const n = Math.sin(c * 127.1 + r * 311.7 + seed * 19.3) * 43758.5453;
@@ -71,6 +143,24 @@ export function buildFieldHeights(cols: number, rows: number): number[][] {
       const nr = p.row + dr;
       if (nc >= 0 && nc < cols && nr >= 0 && nr < rows && h[nr][nc] > 1) {
         h[nr][nc] = 1;
+      }
+    }
+  }
+
+  // 入り口：通路は平地、両脇は崖で幅いっぱいに挟む
+  const gate = getFieldGate(cols, rows);
+  for (const key of gate.clearSet) {
+    const [cs, rs] = key.split(",");
+    const c = Number(cs);
+    const r = Number(rs);
+    if (r >= 0 && r < rows && c >= 0 && c < cols) h[r][c] = 0;
+  }
+  for (let r = gate.cliffRowStart; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      if (c < gate.passageMinCol || c > gate.passageMaxCol) {
+        h[r][c] = 2;
+      } else {
+        h[r][c] = 0;
       }
     }
   }
@@ -182,14 +272,16 @@ export function fieldCellFill(
   return dirt || grass;
 }
 
-/** 水の色（池・みずうみ／深い紺碧寄り） */
+/** 水の色（池・みずうみ／濃いめの青） */
 export function waterFill(col: number, row: number): string {
   const n =
-    smoothNoise(col * 0.35, row * 0.35, 61) * 0.6 +
-    smoothNoise(col * 0.9, row * 0.9, 88) * 0.4;
-  const r = Math.round(36 + n * 28);
-  const g = Math.round(92 + n * 42);
-  const b = Math.round(148 + n * 48);
+    smoothNoise(col * 0.28, row * 0.28, 61) * 0.55 +
+    smoothNoise(col * 0.85, row * 0.85, 88) * 0.35 +
+    smoothNoise(col * 1.6, row * 1.6, 17) * 0.1;
+  // 深い紺碧〜青（やや濃いめ）
+  const r = Math.round(14 + n * 20);
+  const g = Math.round(48 + n * 34);
+  const b = Math.round(108 + n * 48);
   return `rgb(${r},${g},${b})`;
 }
 
@@ -205,9 +297,11 @@ export function buildWaterCells(
 ): { col: number; row: number }[] {
   const out: { col: number; row: number }[] = [];
   const seen = new Set<string>();
+  const gateClear = getFieldGate(cols, rows).clearSet;
   const add = (c: number, r: number) => {
     if (c < 1 || r < 1 || c >= cols - 1 || r >= rows - 1) return;
     if (pathSet.has(`${c},${r}`)) return;
+    if (gateClear.has(`${c},${r}`)) return;
     if (Math.abs(c - spawnAvoid.col) + Math.abs(r - spawnAvoid.row) < 5) return;
     const k = `${c},${r}`;
     if (seen.has(k)) return;
@@ -215,7 +309,7 @@ export function buildWaterCells(
     out.push({ col: c, row: r });
   };
 
-  // 楕円っぽい水たまりを数か所
+  // 楕円っぽい水たまり（入り口回廊は避ける）
   const ponds: { cx: number; cy: number; rx: number; ry: number }[] = [
     {
       cx: cols * 0.22,
@@ -224,16 +318,16 @@ export function buildWaterCells(
       ry: 2.4 + hash2(2, 1, 3) * 1.2,
     },
     {
-      cx: cols * 0.72,
-      cy: rows * 0.38,
+      cx: cols * 0.78,
+      cy: rows * 0.32,
       rx: 4.0 + hash2(3, 2, 4) * 1.6,
       ry: 3.0 + hash2(4, 2, 5) * 1.3,
     },
     {
-      cx: cols * 0.48,
-      cy: rows * 0.78,
-      rx: 3.6 + hash2(5, 3, 6) * 1.5,
-      ry: 2.8 + hash2(6, 3, 7) * 1.2,
+      cx: cols * 0.28,
+      cy: rows * 0.62,
+      rx: 3.4 + hash2(5, 3, 6) * 1.4,
+      ry: 2.6 + hash2(6, 3, 7) * 1.1,
     },
   ];
 
@@ -264,11 +358,13 @@ export function buildFieldRocks(
   waterSet?: Set<string>
 ): { col: number; row: number }[] {
   const rocks: { col: number; row: number }[] = [];
+  const gateClear = getFieldGate(cols, rows).clearSet;
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
       if (c === spawnAvoid.col && r === spawnAvoid.row) continue;
       if (pathSet.has(`${c},${r}`)) continue;
       if (waterSet?.has(`${c},${r}`)) continue;
+      if (gateClear.has(`${c},${r}`)) continue;
       if (Math.abs(c - spawnAvoid.col) + Math.abs(r - spawnAvoid.row) < 3) continue;
       const n = hash2(c, r, 77);
       const preferCliff = heights[r][c] >= 1 ? 0.18 : 0.06;

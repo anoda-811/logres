@@ -14,6 +14,7 @@ import {
   buildGrassTufts,
   buildWaterCells,
   fieldCellFill,
+  getFieldGate,
   hash2,
 } from "../lib/fieldTerrain";
 import {
@@ -26,6 +27,8 @@ type Props = {
   onOpenQuestBoard?: () => void;
   onOpenWeaponShop?: () => void;
   onOpenArmorShop?: () => void;
+  /** フィールド入り口からワールドマップへ */
+  onExitToWorldMap?: () => void;
 };
 
 /** 城下町のクエストボードマス（スポーン付近） */
@@ -40,6 +43,7 @@ export default function GameCanvasIso({
   onOpenQuestBoard,
   onOpenWeaponShop,
   onOpenArmorShop,
+  onExitToWorldMap,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const router = useRouter();
@@ -50,6 +54,8 @@ export default function GameCanvasIso({
   weaponShopRef.current = onOpenWeaponShop;
   const armorShopRef = useRef(onOpenArmorShop);
   armorShopRef.current = onOpenArmorShop;
+  const exitWorldMapRef = useRef(onExitToWorldMap);
+  exitWorldMapRef.current = onExitToWorldMap;
 
   // 本体
   useEffect(() => {
@@ -113,7 +119,13 @@ export default function GameCanvasIso({
     };
     const radius = Math.max(12, Math.floor(tileW * 0.18));
 
-    const spawnAvoid = { col: Math.floor(cols / 2), row: Math.floor(rows / 2) };
+    const fieldGate = isTown ? null : getFieldGate(cols, rows);
+    const gateExitSet = new Set(
+      fieldGate?.exits.map((p) => `${p.col},${p.row}`) ?? []
+    );
+    const spawnAvoid = fieldGate
+      ? { col: fieldGate.spawn.col, row: fieldGate.spawn.row }
+      : { col: Math.floor(cols / 2), row: Math.floor(rows / 2) };
 
     // 高さ・道・水・岩（草原のみ）
     const heights = isTown
@@ -153,6 +165,17 @@ export default function GameCanvasIso({
           { col: ARMOR_SMITH.col, row: ARMOR_SMITH.row },
         ]
       : [...rockBlocked, ...waterCells];
+
+    // 入り口帯にはモンスターを出さない（通行は可）
+    const monsterBlocked: { col: number; row: number }[] = fieldGate
+      ? [
+          ...blocked,
+          ...[...fieldGate.clearSet].map((k) => {
+            const [c, r] = k.split(",").map(Number);
+            return { col: c, row: r };
+          }),
+        ]
+      : blocked;
 
     // モンスター設置（位置は isoToScreen 定義後に初期化）
     sessionStorage.removeItem("defeatedMonster");
@@ -300,7 +323,7 @@ export default function GameCanvasIso({
 
     monsters = isTown
       ? []
-      : createRandomFieldMonsters(cols, rows, blocked, spawnAvoid).map(toLive);
+      : createRandomFieldMonsters(cols, rows, monsterBlocked, spawnAvoid).map(toLive);
 
     const pointInTileTop = (
       px: number,
@@ -482,9 +505,9 @@ export default function GameCanvasIso({
       current: { x: 0, y: 0, targetX: 0, targetY: 0, moving: false, speed: 120, dragging: false }
     };
 
-    // 初期位置：戦闘後は突入前のマス、それ以外はマップ中央
-    let startCol = Math.floor(cols / 2);
-    let startRow = Math.floor(rows / 2);
+    // 初期位置：戦闘後は突入前／草原入場は入り口／それ以外は中央
+    let startCol = spawnAvoid.col;
+    let startRow = spawnAvoid.row;
     const resumePos = consumeFieldReturnPos();
     if (
       resumePos &&
@@ -513,6 +536,9 @@ export default function GameCanvasIso({
           }
         }
       }
+    } else if (!isTown && fieldGate) {
+      startCol = fieldGate.spawn.col;
+      startRow = fieldGate.spawn.row;
     }
     const startCenter = isoToScreen(startCol, startRow);
     state.current.x = startCenter.x - 3;
@@ -539,6 +565,33 @@ export default function GameCanvasIso({
       battleTransition = true;
     }
 
+    let worldMapExitStarted = false;
+    function startWorldMapExit() {
+      if (worldMapExitStarted || isTown || !exitWorldMapRef.current) return;
+      worldMapExitStarted = true;
+      state.current.moving = false;
+      path = [];
+      // 戻ってきたとき入り口内側に出る
+      if (fieldGate) {
+        saveFieldReturnPos({
+          areaId,
+          col: fieldGate.spawn.col,
+          row: fieldGate.spawn.row,
+        });
+      } else {
+        persistReturnPos();
+      }
+      exitWorldMapRef.current();
+    }
+
+    function checkGateExit(col: number, row: number) {
+      if (!isTown && gateExitSet.has(`${col},${row}`)) {
+        startWorldMapExit();
+        return true;
+      }
+      return false;
+    }
+
     // --- 描画ヘルパー ---
     const tileTopPath = (
       ctx: CanvasRenderingContext2D,
@@ -553,7 +606,13 @@ export default function GameCanvasIso({
       ctx.closePath();
     };
 
-    const drawTile = (ctx: CanvasRenderingContext2D, col: number, row: number, fill: string) => {
+    const drawTile = (
+      ctx: CanvasRenderingContext2D,
+      col: number,
+      row: number,
+      fill: string,
+      ts = 0
+    ) => {
       const p = isoToScreen(col, row);
       const h = heightAt(col, row);
       const drop = h * elevStep;
@@ -623,7 +682,7 @@ export default function GameCanvasIso({
         ctx.restore();
       }
 
-      // 水のきらめき・岸の影
+      // 水：深さ・岸・きらめき
       if (isWater) {
         ctx.save();
         ctx.beginPath();
@@ -632,17 +691,71 @@ export default function GameCanvasIso({
         ctx.lineTo(p.x, p.y + tileH / 2 + grow);
         ctx.lineTo(p.x - tileW / 2 - grow, p.y);
         ctx.closePath();
-        ctx.fillStyle = "rgba(160, 210, 255, 0.16)";
-        ctx.fill();
-        // ハイライト帯
-        ctx.fillStyle = "rgba(255,255,255,0.16)";
+        ctx.clip();
+
+        // 深さグラデ（中央やや明るく、縁は濃い）
+        const depth = ctx.createRadialGradient(
+          p.x - tileW * 0.08,
+          p.y - tileH * 0.1,
+          tileW * 0.05,
+          p.x,
+          p.y,
+          tileW * 0.62
+        );
+        depth.addColorStop(0, "rgba(55, 120, 190, 0.28)");
+        depth.addColorStop(0.45, "rgba(20, 70, 140, 0.12)");
+        depth.addColorStop(1, "rgba(6, 24, 64, 0.42)");
+        ctx.fillStyle = depth;
+        ctx.fillRect(p.x - tileW, p.y - tileH, tileW * 2, tileH * 2);
+
+        // 岸に近いほど暗く（地面の影）
+        let landN = 0;
+        for (const [dc, dr] of [
+          [1, 0],
+          [-1, 0],
+          [0, 1],
+          [0, -1],
+          [1, 1],
+          [-1, 1],
+          [1, -1],
+          [-1, -1],
+        ] as const) {
+          if (!waterSet.has(`${col + dc},${row + dr}`)) landN += 1;
+        }
+        if (landN > 0) {
+          ctx.fillStyle = `rgba(4, 18, 42, ${Math.min(0.38, 0.045 * landN)})`;
+          ctx.fillRect(p.x - tileW, p.y - tileH, tileW * 2, tileH * 2);
+        }
+
+        // ゆるい波紋（時間でわずかに動く）
+        const phase = ts * 0.0018 + col * 0.55 + row * 0.4;
+        ctx.strokeStyle = "rgba(160, 210, 255, 0.14)";
+        ctx.lineWidth = 1.1;
+        for (let i = 0; i < 2; i++) {
+          const yy = p.y - tileH * 0.18 + i * tileH * 0.22 + Math.sin(phase + i) * 2.2;
+          ctx.beginPath();
+          ctx.moveTo(p.x - tileW * 0.32, yy);
+          ctx.quadraticCurveTo(
+            p.x + Math.cos(phase * 0.7 + i) * 4,
+            yy - 2.5,
+            p.x + tileW * 0.32,
+            yy + 1
+          );
+          ctx.stroke();
+        }
+
+        // 太陽光のハイライト
+        const hx = p.x - tileW * 0.12 + Math.sin(phase * 0.6) * tileW * 0.05;
+        const hy = p.y - tileH * 0.16 + Math.cos(phase * 0.5) * tileH * 0.04;
+        const shine = ctx.createRadialGradient(hx, hy, 0, hx, hy, tileW * 0.28);
+        shine.addColorStop(0, "rgba(230, 245, 255, 0.34)");
+        shine.addColorStop(0.35, "rgba(160, 210, 255, 0.12)");
+        shine.addColorStop(1, "rgba(160, 210, 255, 0)");
+        ctx.fillStyle = shine;
         ctx.beginPath();
-        ctx.moveTo(p.x - tileW * 0.18, p.y - tileH * 0.08);
-        ctx.lineTo(p.x + tileW * 0.05, p.y - tileH * 0.22);
-        ctx.lineTo(p.x + tileW * 0.12, p.y - tileH * 0.05);
-        ctx.lineTo(p.x - tileW * 0.08, p.y + tileH * 0.02);
-        ctx.closePath();
+        ctx.ellipse(hx, hy, tileW * 0.22, tileH * 0.14, -0.4, 0, Math.PI * 2);
         ctx.fill();
+
         ctx.restore();
       }
 
@@ -718,6 +831,71 @@ export default function GameCanvasIso({
         ctx.fill();
       }
       ctx.restore();
+    };
+
+    /** ワールドマップ境界の青い丸 */
+    const drawGateMarkers = (ctx: CanvasRenderingContext2D, ts: number) => {
+      if (!fieldGate) return;
+      const pulse = (Math.sin(ts / 420) + 1) / 2;
+      for (const m of fieldGate.markers) {
+        const p = isoToScreen(m.col, m.row);
+        const cx = p.x;
+        const cy = p.y + tileH * 0.06;
+        const rx = tileW * 0.22;
+        const ry = tileH * 0.16;
+        ctx.save();
+        // 地面の影
+        ctx.fillStyle = "rgba(10, 30, 70, 0.28)";
+        ctx.beginPath();
+        ctx.ellipse(cx, cy + 2, rx * 1.05, ry * 1.05, 0, 0, Math.PI * 2);
+        ctx.fill();
+        // 外側グロー
+        const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, rx * 1.6);
+        glow.addColorStop(0, `rgba(120, 200, 255, ${0.35 + 0.2 * pulse})`);
+        glow.addColorStop(0.55, `rgba(60, 140, 230, ${0.18 + 0.1 * pulse})`);
+        glow.addColorStop(1, "rgba(40, 100, 200, 0)");
+        ctx.fillStyle = glow;
+        ctx.beginPath();
+        ctx.ellipse(cx, cy, rx * 1.55, ry * 1.55, 0, 0, Math.PI * 2);
+        ctx.fill();
+        // 本体
+        const body = ctx.createRadialGradient(
+          cx - rx * 0.25,
+          cy - ry * 0.35,
+          0,
+          cx,
+          cy,
+          rx
+        );
+        body.addColorStop(0, "#d8f0ff");
+        body.addColorStop(0.35, "#5eb0ff");
+        body.addColorStop(0.75, "#2a6fd4");
+        body.addColorStop(1, "#1a4a9a");
+        ctx.fillStyle = body;
+        ctx.beginPath();
+        ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+        ctx.fill();
+        // 縁
+        ctx.strokeStyle = `rgba(200, 236, 255, ${0.75 + 0.2 * pulse})`;
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+        ctx.stroke();
+        // ハイライト
+        ctx.fillStyle = "rgba(255, 255, 255, 0.45)";
+        ctx.beginPath();
+        ctx.ellipse(
+          cx - rx * 0.22,
+          cy - ry * 0.35,
+          rx * 0.28,
+          ry * 0.22,
+          -0.4,
+          0,
+          Math.PI * 2
+        );
+        ctx.fill();
+        ctx.restore();
+      }
     };
 
     const drawRock = (ctx: CanvasRenderingContext2D, col: number, row: number) => {
@@ -1144,6 +1322,12 @@ export default function GameCanvasIso({
       const next = path.shift();
       if (!next) {
         state.current.moving = false;
+        if (gateExitSet.has(`${cell.col},${cell.row}`)) {
+          playerCol = cell.col;
+          playerRow = cell.row;
+          startWorldMapExit();
+          return;
+        }
         if (battleMonsterId) startBattleTransition();
         return;
       }
@@ -1154,6 +1338,11 @@ export default function GameCanvasIso({
       // 到着予定マスを先に保持（途中で戦闘になっても復帰先が分かる）
       playerCol = next.col;
       playerRow = next.row;
+      if (checkGateExit(playerCol, playerRow)) {
+        state.current.moving = false;
+        path = [];
+        return;
+      }
       if (asLong) {
         longActive.col = cell.col;
         longActive.row = cell.row;
@@ -1447,13 +1636,19 @@ export default function GameCanvasIso({
               state.current.moving = true;
               playerCol = next.col;
               playerRow = next.row;
+              if (checkGateExit(playerCol, playerRow)) {
+                state.current.moving = false;
+                path = [];
+              }
             } else {
               state.current.moving = false;
-              if (battleMonsterId) startBattleTransition();
+              if (!checkGateExit(playerCol, playerRow) && battleMonsterId) {
+                startBattleTransition();
+              }
             }
           } else {
             state.current.moving = false;
-            if (battleMonsterId) {
+            if (!checkGateExit(playerCol, playerRow) && battleMonsterId) {
               startBattleTransition();
             }
             active.col = -1; active.row = -1;
@@ -1494,7 +1689,7 @@ export default function GameCanvasIso({
             monsters,
             cols,
             rows,
-            blocked,
+            monsterBlocked,
             spawnAvoid
           );
           const prev = new Map(monsters.map((m) => [m.instanceId, m]));
@@ -1552,7 +1747,7 @@ export default function GameCanvasIso({
               ? "#c4b49a"
               : "#b39b7a"
             : fieldCellFill(c, r, pathSet, waterSet);
-          drawTile(ctx, c, r, base);
+          drawTile(ctx, c, r, base, ts);
         }
       }
 
@@ -1571,6 +1766,9 @@ export default function GameCanvasIso({
           drawGrassTuft(ctx, t.col, t.row, t.ox, t.oy, t.s);
         }
       }
+
+      // ワールドマップ入り口（青い丸）
+      if (!isTown) drawGateMarkers(ctx, ts);
 
       if (path.length > 0) drawPathPreview(ctx, path);
 
@@ -1797,6 +1995,9 @@ export default function GameCanvasIso({
 
     // クリーンアップ
     return () => {
+      if (!isTown && !worldMapExitStarted && !isTransitioning) {
+        persistReturnPos();
+      }
       if (raf) cancelAnimationFrame(raf);
       window.removeEventListener("resize", onWindowResize);
       canvas.removeEventListener("pointerdown", onPointerDown);

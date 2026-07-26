@@ -5,7 +5,8 @@ import { WORLD_AREAS, type AreaId, type WorldArea } from "../lib/locations";
 import styles from "./WorldMapScreen.module.css";
 
 type Props = {
-  currentAreaId: AreaId;
+  /** null = エリア外（入り口から出た直後など） */
+  currentAreaId: AreaId | null;
   onClose: () => void;
   onTravel: (areaId: AreaId) => void;
 };
@@ -29,7 +30,7 @@ export default function WorldMapScreen({
           />
 
           {WORLD_AREAS.map((area) => {
-            const here = area.id === currentAreaId;
+            const here = currentAreaId != null && area.id === currentAreaId;
             const isSelected = selected?.id === area.id;
             return (
               <button
@@ -76,13 +77,17 @@ export default function WorldMapScreen({
               <button
                 type="button"
                 className={styles.goBtn}
-                disabled={selected.id === currentAreaId}
+                disabled={
+                  currentAreaId != null && selected.id === currentAreaId
+                }
                 onClick={() => {
-                  if (selected.id === currentAreaId) return;
+                  if (currentAreaId != null && selected.id === currentAreaId) {
+                    return;
+                  }
                   onTravel(selected.id);
                 }}
               >
-                {selected.id === currentAreaId
+                {currentAreaId != null && selected.id === currentAreaId
                   ? "すでにここにいます"
                   : "移動する"}
               </button>

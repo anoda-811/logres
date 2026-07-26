@@ -41,6 +41,8 @@ export default function Page() {
   const [character, setCharacter] = useState<PlayerCharacter | null>(null);
   const [areaId, setAreaId] = useState<AreaId>("field");
   const [playView, setPlayView] = useState<PlayView>("field");
+  /** 入り口から出てワールドマップ上にいる（エリア内ではない） */
+  const [awayOnWorldMap, setAwayOnWorldMap] = useState(false);
   const [questBoardOpen, setQuestBoardOpen] = useState(false);
   const [weaponShopOpen, setWeaponShopOpen] = useState(false);
   const [armorShopOpen, setArmorShopOpen] = useState(false);
@@ -87,6 +89,7 @@ export default function Page() {
     setWorld(null);
     setCharacter(null);
     setPlayView("field");
+    setAwayOnWorldMap(false);
     setQuestBoardOpen(false);
     setWeaponShopOpen(false);
     setArmorShopOpen(false);
@@ -94,17 +97,20 @@ export default function Page() {
     fadingRef.current = false;
   };
 
-  const openWorldMap = () => {
+  /** fromGate: 入り口から出た → 草原は「すでにここ」にしない */
+  const openWorldMap = (fromGate = false) => {
     void runWithFade(() => {
       setQuestBoardOpen(false);
       setWeaponShopOpen(false);
       setArmorShopOpen(false);
+      setAwayOnWorldMap(fromGate);
       setPlayView("worldmap");
     });
   };
 
   const closeWorldMap = () => {
     void runWithFade(() => {
+      setAwayOnWorldMap(false);
       setPlayView("field");
     });
   };
@@ -114,6 +120,7 @@ export default function Page() {
       clearFieldReturnPos();
       setAreaId(id);
       saveAreaId(id);
+      setAwayOnWorldMap(false);
       setPlayView("field");
     });
   };
@@ -146,7 +153,7 @@ export default function Page() {
       {started ? (
         playView === "worldmap" ? (
           <WorldMapScreen
-            currentAreaId={areaId}
+            currentAreaId={awayOnWorldMap ? null : areaId}
             onClose={closeWorldMap}
             onTravel={travelTo}
           />
@@ -158,10 +165,11 @@ export default function Page() {
               onOpenQuestBoard={() => setQuestBoardOpen(true)}
               onOpenWeaponShop={() => setWeaponShopOpen(true)}
               onOpenArmorShop={() => setArmorShopOpen(true)}
+              onExitToWorldMap={() => openWorldMap(true)}
             />
             <FieldHUD
               onReturnTitle={returnToTitle}
-              onOpenWorldMap={openWorldMap}
+              onOpenWorldMap={() => openWorldMap(false)}
               locationName={area.name}
               playerName={character?.name ?? "ゆうしゃ"}
               bgmEnabled={bgmEnabled}
