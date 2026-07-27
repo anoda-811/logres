@@ -156,7 +156,7 @@ export default function GameCanvasIso({
     const rows = isTown ? 15 : isSecret ? SECRET_ROWS : FIELD_ROWS;
     const tileW = isTown ? Math.floor(1300 / 15) : FIELD_TILE_W;
     const tileH = Math.floor(tileW / 2);
-    const elevStep = Math.max(10, Math.floor(tileH * 0.62));
+    const elevStep = Math.max(7, Math.floor(tileH * 0.32));
     const playArea = {
       x: 170,
       y: 60,
@@ -546,11 +546,22 @@ export default function GameCanvasIso({
       y: Math.max(screenCorners.minY, Math.min(screenCorners.maxY, y))
     });
 
-    // --- A* 等（既存コードをそのまま） ---
+    // --- A*（斜め移動可・角抜け防止） ---
     type Node = { col: number; row: number };
+    const ORTHO_COST = 10;
+    const DIAG_COST = 14;
     const neighbors = (n: Node) => {
-      const dirs = [{ col: 1, row: 0 }, { col: -1, row: 0 }, { col: 0, row: 1 }, { col: 0, row: -1 }];
-      const out: Node[] = [];
+      const dirs = [
+        { col: 1, row: 0, cost: ORTHO_COST },
+        { col: -1, row: 0, cost: ORTHO_COST },
+        { col: 0, row: 1, cost: ORTHO_COST },
+        { col: 0, row: -1, cost: ORTHO_COST },
+        { col: 1, row: 1, cost: DIAG_COST },
+        { col: 1, row: -1, cost: DIAG_COST },
+        { col: -1, row: 1, cost: DIAG_COST },
+        { col: -1, row: -1, cost: DIAG_COST },
+      ];
+      const out: { node: Node; cost: number }[] = [];
       const fromH = heightAt(n.col, n.row);
       for (const d of dirs) {
         const nc = n.col + d.col;
@@ -558,11 +569,28 @@ export default function GameCanvasIso({
         if (!inBounds(nc, nr) || isBlocked(nc, nr)) continue;
         // 1段までなら昇降可（崖は通れない）
         if (Math.abs(heightAt(nc, nr) - fromH) > 1) continue;
-        out.push({ col: nc, row: nr });
+        // 斜めは両隣が塞がっていると角抜けになるので不可
+        if (d.col !== 0 && d.row !== 0) {
+          const sideABlocked =
+            !inBounds(n.col + d.col, n.row) ||
+            isBlocked(n.col + d.col, n.row) ||
+            Math.abs(heightAt(n.col + d.col, n.row) - fromH) > 1;
+          const sideBBlocked =
+            !inBounds(n.col, n.row + d.row) ||
+            isBlocked(n.col, n.row + d.row) ||
+            Math.abs(heightAt(n.col, n.row + d.row) - fromH) > 1;
+          if (sideABlocked || sideBBlocked) continue;
+        }
+        out.push({ node: { col: nc, row: nr }, cost: d.cost });
       }
       return out;
     };
-    const heuristic = (a: Node, b: Node) => Math.abs(a.col - b.col) + Math.abs(a.row - b.row);
+    /** オクタイル距離（斜め込みヒューリスティック） */
+    const heuristic = (a: Node, b: Node) => {
+      const dx = Math.abs(a.col - b.col);
+      const dy = Math.abs(a.row - b.row);
+      return ORTHO_COST * (dx + dy) + (DIAG_COST - 2 * ORTHO_COST) * Math.min(dx, dy);
+    };
     function findPath(start: Node, goal: Node): Node[] | null {
       const key = (n: Node) => `${n.col},${n.row}`;
       const open = new Map<string, { node: Node; f: number }>();
@@ -589,9 +617,9 @@ export default function GameCanvasIso({
           return path;
         }
         open.delete(currentKey);
-        for (const nb of neighbors(current)) {
+        for (const { node: nb, cost } of neighbors(current)) {
           const nbKey = key(nb);
-          const tentativeG = (gScore.get(currentKey) ?? Infinity) + 1;
+          const tentativeG = (gScore.get(currentKey) ?? Infinity) + cost;
           if (tentativeG < (gScore.get(nbKey) ?? Infinity)) {
             cameFrom.set(nbKey, currentKey);
             gScore.set(nbKey, tentativeG);
@@ -827,33 +855,121 @@ export default function GameCanvasIso({
       // わずかに重ねて隙間の黒い線（升目感）を消す
       const grow = isTown ? 0 : 0.6;
 
-      // 段差の崖面（ログレス風の土の壁）— 水は出さない
+      // 段差の崖面（既存地面タイルを伸ばして土の壁に）— 水は出さない
       if (drop > 0.5 && !isWater) {
-        const leftLower = heightAt(col, row + 1) < h;
-        const rightLower = heightAt(col + 1, row) < h;
-        if (leftLower || !inBounds(col, row + 1)) {
+        const cliffTileIdx = pickFieldGroundTile(col, row, pathSet, waterSet, {
+          lakeShore: areaId === "lake" || isSecret,
+        });
+        const cliffTile =
+          cliffTileIdx >= 0 && cliffTileIdx < fieldTileImgs.length
+            ? fieldTileImgs[cliffTileIdx]
+            : null;
+        const cliffReady =
+          !!cliffTile && cliffTile.complete && cliffTile.naturalWidth > 0;
+
+        const paintCliff = (
+          x0: number,
+          y0: number,
+          x1: number,
+          y1: number,
+          x2: number,
+          y2: number,
+          x3: number,
+          y3: number,
+          faceDrop: number,
+          shade: number
+        ) => {
+          if (faceDrop < 0.5) return;
+          ctx.save();
           ctx.beginPath();
-          ctx.moveTo(p.x - tileW / 2, p.y);
-          ctx.lineTo(p.x, p.y + tileH / 2);
-          ctx.lineTo(p.x, p.y + tileH / 2 + drop);
-          ctx.lineTo(p.x - tileW / 2, p.y + drop);
+          ctx.moveTo(x0, y0);
+          ctx.lineTo(x1, y1);
+          ctx.lineTo(x2, y2);
+          ctx.lineTo(x3, y3);
           ctx.closePath();
-          ctx.fillStyle = "#7a5a32";
-          ctx.fill();
-          ctx.fillStyle = "rgba(30, 16, 6, 0.28)";
-          ctx.fill();
+          ctx.clip();
+
+          if (cliffReady && cliffTile) {
+            const midX = (x0 + x1 + x2 + x3) / 4;
+            const topY = Math.min(y0, y1);
+            const botY = Math.max(y2, y3);
+            const dw = tileW * 1.15;
+            const dh = Math.max(faceDrop + tileH * 0.35, tileH * 0.7);
+            ctx.drawImage(
+              cliffTile,
+              midX - dw / 2,
+              topY - tileH * 0.08,
+              dw,
+              dh
+            );
+            // 側面らしく少し暗く＋緑寄りの土色
+            const soil = ctx.createLinearGradient(midX, topY, midX, botY);
+            soil.addColorStop(0, `rgba(55, 72, 38, ${0.22 + shade * 0.08})`);
+            soil.addColorStop(0.18, `rgba(90, 70, 42, ${0.28 + shade * 0.1})`);
+            soil.addColorStop(0.55, `rgba(72, 54, 32, ${0.38 + shade * 0.12})`);
+            soil.addColorStop(1, `rgba(40, 28, 16, ${0.5 + shade * 0.12})`);
+            ctx.fillStyle = soil;
+            ctx.fill();
+            // 薄い層の筋（自然な土感）
+            ctx.globalAlpha = 0.18 + shade * 0.06;
+            for (let i = 1; i <= 3; i++) {
+              const ty = topY + (faceDrop * i) / 4;
+              ctx.fillStyle =
+                i % 2 === 0
+                  ? "rgba(120, 100, 60, 0.35)"
+                  : "rgba(30, 22, 12, 0.4)";
+              ctx.fillRect(midX - dw / 2, ty, dw, Math.max(1.2, faceDrop * 0.06));
+            }
+            ctx.globalAlpha = 1;
+            // 上端の草地リップ
+            const lip = ctx.createLinearGradient(midX, topY - 2, midX, topY + faceDrop * 0.22);
+            lip.addColorStop(0, "rgba(90, 140, 55, 0.45)");
+            lip.addColorStop(0.55, "rgba(70, 100, 40, 0.18)");
+            lip.addColorStop(1, "rgba(0, 0, 0, 0)");
+            ctx.fillStyle = lip;
+            ctx.fill();
+          } else {
+            ctx.fillStyle = shade > 0.5 ? "#6a5538" : "#7a6848";
+            ctx.fill();
+            ctx.fillStyle = `rgba(30, 20, 10, ${0.2 + shade * 0.15})`;
+            ctx.fill();
+          }
+          ctx.restore();
+        };
+
+        const leftH = inBounds(col, row + 1) ? heightAt(col, row + 1) : 0;
+        const rightH = inBounds(col + 1, row) ? heightAt(col + 1, row) : 0;
+        const leftLower = leftH < h;
+        const rightLower = rightH < h;
+        if (leftLower || !inBounds(col, row + 1)) {
+          const faceDrop = Math.max(elevStep * 0.85, (h - leftH) * elevStep);
+          paintCliff(
+            p.x - tileW / 2,
+            p.y,
+            p.x,
+            p.y + tileH / 2,
+            p.x,
+            p.y + tileH / 2 + faceDrop,
+            p.x - tileW / 2,
+            p.y + faceDrop,
+            faceDrop,
+            0.35
+          );
         }
         if (rightLower || !inBounds(col + 1, row)) {
-          ctx.beginPath();
-          ctx.moveTo(p.x + tileW / 2, p.y);
-          ctx.lineTo(p.x, p.y + tileH / 2);
-          ctx.lineTo(p.x, p.y + tileH / 2 + drop);
-          ctx.lineTo(p.x + tileW / 2, p.y + drop);
-          ctx.closePath();
-          ctx.fillStyle = "#5c4324";
-          ctx.fill();
-          ctx.fillStyle = "rgba(16, 8, 2, 0.32)";
-          ctx.fill();
+          const faceDrop = Math.max(elevStep * 0.85, (h - rightH) * elevStep);
+          paintCliff(
+            p.x + tileW / 2,
+            p.y,
+            p.x,
+            p.y + tileH / 2,
+            p.x,
+            p.y + tileH / 2 + faceDrop,
+            p.x + tileW / 2,
+            p.y + faceDrop,
+            faceDrop,
+            0.55
+          );
         }
       }
 
