@@ -28,6 +28,7 @@ import {
   subscribeChat,
 } from "../lib/chatStore";
 import { loadBgmEnabled } from "../lib/settings";
+import { playJaegerRumbleSfx } from "../lib/sfx";
 import FieldBgm from "./FieldBgm";
 
 type Command = BattleSkillCommand;
@@ -65,6 +66,32 @@ const SWING_FRAMES = [
 const SWING_FRAME_AT_MS = [400, 450, 500, 550, 600, 650] as const;
 /** 頭上ポーズをキープする時間（貯め）のあと立ち絵へ */
 const SWING_HOLD_END_MS = 1000;
+
+/** ダークスラッシュ用コマ送り: 振り上げ → 貯め → 上から切り下ろし */
+const DARK_FRAMES = [
+  "/chara-dark-0.png", // 頭上に振り上げ
+  "/chara-dark-1.png", // 闇をためる
+  "/chara-dark-2.png", // 斜めに切り下ろし中
+  "/chara-dark-3.png", // 着弾
+  "/chara-dark-4.png", // 余韻
+] as const;
+/** 接近後に振り上げ→貯め→切り下ろし（フルスイングと同じく接近あり） */
+const DARK_FRAME_AT_MS = [400, 560, 800, 940, 1080] as const;
+const DARK_HOLD_END_MS = 1400;
+
+/** ランギィールイェーガー: 引きずり接近→ため→跳躍→落下斬り */
+const JAEGER_FRAMES = [
+  "/chara-jaeger-0.png", // 剣を引きずりながら接近
+  "/chara-jaeger-1.png", // 地面でためる
+  "/chara-jaeger-2.png", // 飛び上がり・振り上げ
+  "/chara-jaeger-3.png", // 空中頂上
+  "/chara-jaeger-4.png", // 落下しながら振り下ろし
+  "/chara-jaeger-5.png", // 着弾
+] as const;
+/** 接近開始からすでに引きずり（0ms〜） */
+const JAEGER_FRAME_AT_MS = [0, 320, 720, 900, 1050, 1180] as const;
+const JAEGER_HOLD_END_MS = 1650;
+
 const PLAYER_SP_RATE = 1 / SEC_PER_SP;
 /** 1秒あたりの敵ゲージ（満タンまで約3.5秒で攻撃） */
 const ENEMY_GAUGE_RATE = 0.28;
@@ -189,6 +216,10 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
   const [motionNonce, setMotionNonce] = useState(0);
   /** フルスイングのスプライトコマ（null=通常立ち絵） */
   const [swingFrame, setSwingFrame] = useState<number | null>(null);
+  /** ダークスラッシュのスプライトコマ */
+  const [darkFrame, setDarkFrame] = useState<number | null>(null);
+  /** ランギィールイェーガーのスプライトコマ */
+  const [jaegerFrame, setJaegerFrame] = useState<number | null>(null);
   /** 接近中の敵 battleId */
   const [nearEnemyId, setNearEnemyId] = useState<string | null>(null);
   /** 反撃の種類（1=反撃 / 2=復讐） */
@@ -352,11 +383,12 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
       return;
     }
     setSwingFrame(null);
+    setDarkFrame(null);
+    setJaegerFrame(null);
     const timers = [
       ...SWING_FRAME_AT_MS.map((at, i) =>
         window.setTimeout(() => setSwingFrame(i), at)
       ),
-      // 貯め終わり〜戻り際は立ち絵に戻す
       window.setTimeout(() => setSwingFrame(null), SWING_HOLD_END_MS),
     ];
     for (const src of SWING_FRAMES) {
@@ -368,12 +400,64 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
     };
   }, [playerMotion, motionNonce]);
 
+  /** ダークスラッシュ：接近後に振り上げ→貯め→上から切り下ろし */
+  useEffect(() => {
+    if (playerMotion !== "lunge-cleave") {
+      setDarkFrame(null);
+      return;
+    }
+    setDarkFrame(null);
+    setSwingFrame(null);
+    setJaegerFrame(null);
+    const timers = [
+      ...DARK_FRAME_AT_MS.map((at, i) =>
+        window.setTimeout(() => setDarkFrame(i), at)
+      ),
+      window.setTimeout(() => setDarkFrame(null), DARK_HOLD_END_MS),
+    ];
+    for (const src of DARK_FRAMES) {
+      const img = new Image();
+      img.src = src;
+    }
+    return () => {
+      for (const t of timers) window.clearTimeout(t);
+    };
+  }, [playerMotion, motionNonce]);
+
+  /** イェーガー：引きずり接近→ため→跳躍→落下斬り */
+  useEffect(() => {
+    if (playerMotion !== "lunge-jaeger") {
+      setJaegerFrame(null);
+      return;
+    }
+    setJaegerFrame(null);
+    setSwingFrame(null);
+    setDarkFrame(null);
+    const timers = [
+      ...JAEGER_FRAME_AT_MS.map((at, i) =>
+        window.setTimeout(() => setJaegerFrame(i), at)
+      ),
+      window.setTimeout(() => setJaegerFrame(null), JAEGER_HOLD_END_MS),
+    ];
+    for (const src of JAEGER_FRAMES) {
+      const img = new Image();
+      img.src = src;
+    }
+    return () => {
+      for (const t of timers) window.clearTimeout(t);
+    };
+  }, [playerMotion, motionNonce]);
+
   const playerBattleSrc =
     clearStats || result === "win"
       ? "/chara-victory.png"
-      : swingFrame !== null
-        ? SWING_FRAMES[swingFrame] ?? "/chara-battle.png"
-        : "/chara-battle.png";
+      : jaegerFrame !== null
+        ? JAEGER_FRAMES[jaegerFrame] ?? "/chara-battle.png"
+        : darkFrame !== null
+          ? DARK_FRAMES[darkFrame] ?? "/chara-battle.png"
+          : swingFrame !== null
+            ? SWING_FRAMES[swingFrame] ?? "/chara-battle.png"
+            : "/chara-battle.png";
 
   const setMenuOpenMode = (
     mode: "self" | "attack" | null,
@@ -560,8 +644,8 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
       case "dark":
         return {
           motion: "lunge-cleave" as const,
-          hitMs: 720,
-          totalMs: 1350,
+          hitMs: 960,
+          totalMs: 1600,
         };
       case "power":
         return {
@@ -572,7 +656,7 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
       case "jaeger":
         return {
           motion: "lunge-jaeger" as const,
-          hitMs: 1080,
+          hitMs: 1200,
           totalMs: 1850,
         };
       default:
@@ -952,6 +1036,9 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
     setPlayerMotion(anim.motion);
     setMotionNonce((n) => n + 1);
     showSkillBanner("player", cmd.label);
+    if (cmd.id === "jaeger") {
+      playJaegerRumbleSfx();
+    }
 
     let dmg =
       cmd.power +
@@ -1208,11 +1295,6 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
           data-aim={
             attackAimSlot === null ? undefined : String(attackAimSlot)
           }
-          style={
-            playerMotion === "lunge-cleave"
-              ? { animation: "player-lunge-cleave 1.35s ease-in-out both" }
-              : undefined
-          }
         >
           {bubble && (
             <div className="speech-bubble battle">{bubble.text}</div>
@@ -1233,7 +1315,9 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
               draggable={false}
               className={`lr-battle-chara${shakePlayer ? " shake" : ""}${
                 clearStats || result === "win" ? " victory" : ""
-              }${swingFrame !== null ? " swinging" : ""}`}
+              }${swingFrame !== null ? " swinging" : ""}${
+                darkFrame !== null ? " dark-cleaving" : ""
+              }${jaegerFrame !== null ? " jaeger-slash" : ""}`}
             />
           </button>
           <div className="lr-player-meta">

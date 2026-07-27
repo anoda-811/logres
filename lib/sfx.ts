@@ -1,7 +1,9 @@
 import { loadSfxEnabled, saveSfxEnabled } from "./settings";
 
 const CLICK_SRC = "/sfx/click.mp3";
-const CLICK_VOLUME = 0.2;
+const CLICK_VOLUME = 0.05;
+const JAEGER_RUMBLE_SRC = "/sfx/jaeger-rumble.wav";
+const JAEGER_RUMBLE_VOLUME = 0.65;
 
 type Listener = () => void;
 const listeners = new Set<Listener>();
@@ -49,19 +51,27 @@ export function toggleSfxEnabled(): boolean {
   return next;
 }
 
-/** クリック音（OFF なら無音。連続クリック用に都度生成） */
-export function playClickSfx() {
+function playSfx(src: string, volume: number) {
   if (typeof window === "undefined") return;
   ensureHydrated();
   if (!sfxEnabled) return;
   try {
-    const audio = new Audio(encodeURI(CLICK_SRC));
-    audio.preload = "auto";
-    audio.volume = CLICK_VOLUME;
+    const audio = new Audio(src);
+    audio.volume = Math.max(0, Math.min(1, volume));
     void audio.play().catch(() => {
       /* 自動再生制限など */
     });
   } catch {
     /* ignore */
   }
+}
+
+/** クリック音（OFF なら無音。連続クリック用に都度生成） */
+export function playClickSfx() {
+  playSfx(CLICK_SRC, CLICK_VOLUME);
+}
+
+/** ランギィールイェーガー発動時の地鳴り */
+export function playJaegerRumbleSfx() {
+  playSfx(JAEGER_RUMBLE_SRC, JAEGER_RUMBLE_VOLUME);
 }
