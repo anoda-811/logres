@@ -311,6 +311,11 @@ export default function GameCanvasIso({
       img.src = src;
       return img;
     });
+    /** 草原の段差用（生成テクスチャ） */
+    const cliffFaceImg = new Image();
+    cliffFaceImg.src = "/tiles/field/cliff-face.png";
+    const cliffStepImg = new Image();
+    cliffStepImg.src = "/tiles/field/cliff-step.png";
     const smithImg = new Image();
     smithImg.src = "/blacksmith.png";
     const armorSmithImg = new Image();
@@ -855,17 +860,21 @@ export default function GameCanvasIso({
       // わずかに重ねて隙間の黒い線（升目感）を消す
       const grow = isTown ? 0 : 0.6;
 
-      // 段差の崖面（既存地面タイルを伸ばして土の壁に）— 水は出さない
+      // 段差の崖面（専用テクスチャ）— 水は出さない
       if (drop > 0.5 && !isWater) {
-        const cliffTileIdx = pickFieldGroundTile(col, row, pathSet, waterSet, {
+        const faceReady =
+          cliffFaceImg.complete && cliffFaceImg.naturalWidth > 0;
+        const stepReady =
+          cliffStepImg.complete && cliffStepImg.naturalWidth > 0;
+        const groundIdx = pickFieldGroundTile(col, row, pathSet, waterSet, {
           lakeShore: areaId === "lake" || isSecret,
         });
-        const cliffTile =
-          cliffTileIdx >= 0 && cliffTileIdx < fieldTileImgs.length
-            ? fieldTileImgs[cliffTileIdx]
+        const groundTile =
+          groundIdx >= 0 && groundIdx < fieldTileImgs.length
+            ? fieldTileImgs[groundIdx]
             : null;
-        const cliffReady =
-          !!cliffTile && cliffTile.complete && cliffTile.naturalWidth > 0;
+        const groundReady =
+          !!groundTile && groundTile.complete && groundTile.naturalWidth > 0;
 
         const paintCliff = (
           x0: number,
@@ -877,62 +886,116 @@ export default function GameCanvasIso({
           x3: number,
           y3: number,
           faceDrop: number,
-          shade: number
+          shade: number,
+          side: 0 | 1
         ) => {
           if (faceDrop < 0.5) return;
+          // 角の黒い隙間を埋めるため少し外側へ広げる
+          const ox = side === 0 ? -0.8 : 0.8;
+          const oy = 0.6;
           ctx.save();
           ctx.beginPath();
-          ctx.moveTo(x0, y0);
+          ctx.moveTo(x0 + ox, y0);
           ctx.lineTo(x1, y1);
-          ctx.lineTo(x2, y2);
-          ctx.lineTo(x3, y3);
+          ctx.lineTo(x2, y2 + oy);
+          ctx.lineTo(x3 + ox, y3 + oy);
           ctx.closePath();
           ctx.clip();
 
-          if (cliffReady && cliffTile) {
-            const midX = (x0 + x1 + x2 + x3) / 4;
-            const topY = Math.min(y0, y1);
-            const botY = Math.max(y2, y3);
-            const dw = tileW * 1.15;
-            const dh = Math.max(faceDrop + tileH * 0.35, tileH * 0.7);
+          const midX = (x0 + x1 + x2 + x3) / 4;
+          const topY = Math.min(y0, y1);
+          const botY = Math.max(y2, y3);
+          const dw = tileW * 1.35;
+          const dh = Math.max(faceDrop + tileH * 0.55, tileH * 0.9);
+
+          let drew = false;
+          if (faceReady) {
+            // 上端の草地〜土の境目を多めに使う（下の暗い岩だけにならないよう）
+            const sw = cliffFaceImg.naturalWidth;
+            const sh = cliffFaceImg.naturalHeight;
+            const sx = Math.floor(hash2(col, row, 41 + side) * sw * 0.4);
+            const sy = 0;
+            const sww = Math.max(16, Math.floor(sw * 0.6));
+            const shh = Math.max(16, Math.floor(sh * 0.48));
             ctx.drawImage(
-              cliffTile,
+              cliffFaceImg,
+              sx,
+              sy,
+              sww,
+              shh,
+              midX - dw / 2,
+              topY - tileH * 0.12,
+              dw,
+              dh
+            );
+            drew = true;
+          } else if (stepReady) {
+            // 段差画像の崖帯（中央付近）を横に伸ばす
+            const sw = cliffStepImg.naturalWidth;
+            const sh = cliffStepImg.naturalHeight;
+            ctx.drawImage(
+              cliffStepImg,
+              Math.floor(sw * 0.15),
+              Math.floor(sh * 0.32),
+              Math.floor(sw * 0.7),
+              Math.floor(sh * 0.38),
+              midX - dw / 2,
+              topY - tileH * 0.1,
+              dw,
+              dh
+            );
+            drew = true;
+          } else if (groundReady && groundTile) {
+            ctx.drawImage(
+              groundTile,
               midX - dw / 2,
               topY - tileH * 0.08,
               dw,
               dh
             );
-            // 側面らしく少し暗く＋緑寄りの土色
-            const soil = ctx.createLinearGradient(midX, topY, midX, botY);
-            soil.addColorStop(0, `rgba(55, 72, 38, ${0.22 + shade * 0.08})`);
-            soil.addColorStop(0.18, `rgba(90, 70, 42, ${0.28 + shade * 0.1})`);
-            soil.addColorStop(0.55, `rgba(72, 54, 32, ${0.38 + shade * 0.12})`);
-            soil.addColorStop(1, `rgba(40, 28, 16, ${0.5 + shade * 0.12})`);
-            ctx.fillStyle = soil;
+            drew = true;
+          }
+
+          if (!drew) {
+            ctx.fillStyle = shade > 0.5 ? "#6a5538" : "#7a6848";
             ctx.fill();
-            // 薄い層の筋（自然な土感）
-            ctx.globalAlpha = 0.18 + shade * 0.06;
-            for (let i = 1; i <= 3; i++) {
-              const ty = topY + (faceDrop * i) / 4;
-              ctx.fillStyle =
-                i % 2 === 0
-                  ? "rgba(120, 100, 60, 0.35)"
-                  : "rgba(30, 22, 12, 0.4)";
-              ctx.fillRect(midX - dw / 2, ty, dw, Math.max(1.2, faceDrop * 0.06));
-            }
-            ctx.globalAlpha = 1;
-            // 上端の草地リップ
-            const lip = ctx.createLinearGradient(midX, topY - 2, midX, topY + faceDrop * 0.22);
-            lip.addColorStop(0, "rgba(90, 140, 55, 0.45)");
-            lip.addColorStop(0.55, "rgba(70, 100, 40, 0.18)");
+          }
+
+          // 薄い陰影のみ（テクスチャを茶色ベタに潰さない）
+          const soil = ctx.createLinearGradient(midX, topY, midX, botY);
+          soil.addColorStop(0, `rgba(50, 80, 35, ${0.1 + shade * 0.04})`);
+          soil.addColorStop(0.25, `rgba(0, 0, 0, ${0.04 + shade * 0.05})`);
+          soil.addColorStop(1, `rgba(25, 15, 8, ${0.14 + shade * 0.08})`);
+          ctx.fillStyle = soil;
+          ctx.fill();
+
+          // 草地リップをはっきり出す
+          if (faceReady || stepReady) {
+            const lipH = Math.max(3, faceDrop * 0.32);
+            const lip = ctx.createLinearGradient(midX, topY - 1, midX, topY + lipH);
+            lip.addColorStop(0, "rgba(85, 150, 55, 0.55)");
+            lip.addColorStop(0.45, "rgba(60, 110, 40, 0.28)");
             lip.addColorStop(1, "rgba(0, 0, 0, 0)");
             ctx.fillStyle = lip;
             ctx.fill();
-          } else {
-            ctx.fillStyle = shade > 0.5 ? "#6a5538" : "#7a6848";
-            ctx.fill();
-            ctx.fillStyle = `rgba(30, 20, 10, ${0.2 + shade * 0.15})`;
-            ctx.fill();
+            if (faceReady) {
+              // 草テクスチャを上端に薄く重ねる
+              const sw = cliffFaceImg.naturalWidth;
+              const sh = cliffFaceImg.naturalHeight;
+              ctx.globalAlpha = 0.55;
+              ctx.drawImage(
+                cliffFaceImg,
+                0,
+                0,
+                sw,
+                Math.floor(sh * 0.16),
+                midX - dw / 2,
+                topY - 2,
+                dw,
+                lipH + 2
+              );
+              ctx.globalAlpha = 1;
+            }
           }
           ctx.restore();
         };
@@ -953,7 +1016,8 @@ export default function GameCanvasIso({
             p.x - tileW / 2,
             p.y + faceDrop,
             faceDrop,
-            0.35
+            0.3,
+            0
           );
         }
         if (rightLower || !inBounds(col + 1, row)) {
@@ -968,7 +1032,8 @@ export default function GameCanvasIso({
             p.x + tileW / 2,
             p.y + faceDrop,
             faceDrop,
-            0.55
+            0.48,
+            1
           );
         }
       }
@@ -1712,7 +1777,14 @@ export default function GameCanvasIso({
 
     // --- キャラ画像はループ外で一度だけ読み込む ---
     let lastTs: number | null = null;
-    const charImg = new Image();
+    const charIdleImg = new Image();
+    /** 左向き走り2コマ（右向きは描画時に反転） */
+    const charRunImgs = [new Image(), new Image()] as [
+      HTMLImageElement,
+      HTMLImageElement,
+    ];
+    let charFacing: "l" | "r" = "r";
+    let runAnimT = 0;
     let started = false;
     const startLoop = () => {
       if (started) return;
@@ -1720,10 +1792,15 @@ export default function GameCanvasIso({
       lastTs = null;
       raf = requestAnimationFrame(loop);
     };
-    charImg.onerror = (e) => {
+    const onCharErr = (e: Event | string) => {
       console.error("キャラ画像読み込み失敗", e);
     };
-    charImg.src = "/chara.png";
+    charIdleImg.onerror = onCharErr;
+    charIdleImg.src = "/chara.png";
+    charRunImgs[0].src = "/chara-run-l0.png";
+    charRunImgs[1].src = "/chara-run-l1.png";
+    charRunImgs[0].onerror = onCharErr;
+    charRunImgs[1].onerror = onCharErr;
 
     // --- 座標変換ユーティリティ（中心原点対応） ---
     function toCanvasPos(clientX: number, clientY: number) {
@@ -1827,8 +1904,8 @@ export default function GameCanvasIso({
       if (!boss) return false;
       const def = MONSTERS[boss.id];
       const scale = (tileW / 56) * 1.35;
-      const drawW = 96 * scale;
-      const drawH = 88 * scale;
+      const drawW = 74 * scale;
+      const drawH = 90 * scale;
       const top = boss.y - drawH * 0.8;
       const left = boss.x - drawW / 2;
       const pad = 8;
@@ -2267,42 +2344,86 @@ export default function GameCanvasIso({
     };
     canvas.addEventListener("pointerleave", onPointerLeave);
 
-    // キャラクター描画
+    // キャラクター描画（停止=立ち絵 / 移動=左走りを反転で両向き）
+    // chara.png は 1024 キャンバスに余白多め、走りはタイトなので見た目高さを揃える
+    const CHAR_IDLE_CANVAS_H = 1024;
+    const CHAR_IDLE_CONTENT_H = 672;
     function drawCharacter() {
-      // デバッグ用: 一時的に有効にして位置確認
-      // ctx.fillStyle = 'red';
-      // ctx.fillRect(Math.round(state.current.x)-2, Math.round(state.current.y)-2, 4, 4);
+      const moving = state.current.moving;
+      const frame =
+        moving && runAnimT >= 0
+          ? Math.floor(runAnimT * 8) % 2
+          : 0;
+      const runImg = charRunImgs[frame];
+      const useRun =
+        moving &&
+        runImg.complete &&
+        runImg.naturalWidth > 0;
+      const img = useRun
+        ? runImg
+        : charIdleImg.complete && charIdleImg.naturalWidth > 0
+          ? charIdleImg
+          : null;
 
-      const scaleFactor = 0.11 * (tileW / 56); // 少し小さめ
-      const imgW = charImg.naturalWidth || (radius / 2);
-      const imgH = charImg.naturalHeight || (radius / 2);
-      const drawW = Math.max(1, Math.round(imgW * scaleFactor));
-      const drawH = Math.max(1, Math.round(imgH * scaleFactor));
+      // タイルに対して適度な大きさ（立ち／走りで体の高さを一致）
+      const bodyH = Math.max(38, Math.round(tileH * 3.35 * (2 / 3)));
+      let drawW: number;
+      let drawH: number;
+      if (img) {
+        const iw = img.naturalWidth;
+        const ih = img.naturalHeight;
+        if (useRun) {
+          drawH = bodyH;
+        } else {
+          const contentH = Math.min(
+            ih,
+            Math.round(ih * (CHAR_IDLE_CONTENT_H / CHAR_IDLE_CANVAS_H))
+          );
+          drawH = Math.max(
+            bodyH,
+            Math.round((bodyH * ih) / Math.max(1, contentH))
+          );
+        }
+        drawW = Math.max(1, Math.round((iw / ih) * drawH));
+      } else {
+        drawW = Math.round(radius * 1.6);
+        drawH = Math.round(radius * 2.2);
+      }
 
-      // 足元アンカー（画像下端を足元と仮定）
       const anchorX = drawW / 2;
-      const anchorY = drawH * 0.86; // 調整値: 0.9〜1.0 を試す
-
-      // 描画座標（ワールド座標。カメラ translate 内で描く）
+      const anchorY = drawH * (useRun ? 0.93 : 0.9);
       const dx = Math.round(state.current.x - anchorX);
       const dy = Math.round(state.current.y - anchorY);
+      const flipX = useRun && charFacing === "r";
 
-      if (charImg.complete && charImg.naturalWidth > 0) {
-        ctx.drawImage(charImg, dx, dy, drawW, drawH);
+      if (img) {
+        if (flipX) {
+          ctx.save();
+          ctx.translate(Math.round(state.current.x), 0);
+          ctx.scale(-1, 1);
+          ctx.drawImage(
+            img,
+            -anchorX,
+            dy,
+            drawW,
+            drawH
+          );
+          ctx.restore();
+        } else {
+          ctx.drawImage(img, dx, dy, drawW, drawH);
+        }
       } else {
-        // フォールバック（小さい円）
         ctx.save();
-        ctx.fillStyle = '#FFD54F';
+        ctx.fillStyle = "#FFD54F";
         ctx.beginPath();
         ctx.arc(state.current.x, state.current.y - 6, radius, 0, Math.PI * 2);
         ctx.fill();
-        ctx.strokeStyle = '#B8860B';
+        ctx.strokeStyle = "#B8860B";
         ctx.lineWidth = 2;
         ctx.stroke();
         ctx.restore();
       }
 
-      // チャット吹き出し
       const bubble = getSpeechBubble();
       if (bubble) {
         drawSpeechBubble(state.current.x, dy - 8, bubble.text);
@@ -2388,6 +2509,15 @@ export default function GameCanvasIso({
         const dx = state.current.targetX - state.current.x;
         const dy = state.current.targetY - state.current.y;
         const dist = Math.hypot(dx, dy);
+        if (dist > 0.5) {
+          // 画面上の左右で向き（アイソメは X 優先、ほぼ縦なら Y）
+          if (Math.abs(dx) >= Math.abs(dy) * 0.35) {
+            charFacing = dx >= 0 ? "r" : "l";
+          } else {
+            charFacing = dy >= 0 ? "r" : "l";
+          }
+        }
+        runAnimT += dt;
         if (dist < ARRIVAL_THRESHOLD) {
           state.current.x = state.current.targetX;
           state.current.y = state.current.targetY;
@@ -2430,6 +2560,8 @@ export default function GameCanvasIso({
           state.current.x += dx * ratio;
           state.current.y += dy * ratio;
         }
+      } else {
+        runAnimT = 0;
       }
 
       // clamp
@@ -2704,10 +2836,10 @@ export default function GameCanvasIso({
         const isCondor = m.id === 2;
         const isBoss = !!def?.boss;
         const span = def?.fieldTileSpan ?? 1;
-        // ボスは約2タイル強（以前は大きすぎた）
+        // ボスは約2タイル強（横に伸びすぎないよう幅を抑える）
         const scale = isBoss ? (tileW / 56) * 1.35 : tileW / 56;
-        const drawW = (isCondor ? 88 : isBoss ? 96 : 60) * scale;
-        const drawH = (isCondor ? 72 : isBoss ? 88 : 48) * scale;
+        const drawW = (isCondor ? 88 : isBoss ? 74 : 60) * scale;
+        const drawH = (isCondor ? 72 : isBoss ? 90 : 48) * scale;
         const topY = m.y - drawH * (isBoss ? 0.8 : 0.72);
 
         if (isBoss && hoverBoss) {

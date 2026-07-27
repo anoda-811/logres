@@ -1872,7 +1872,7 @@ body {
 .lr-actor.player.lunge-swing,
 .lr-actor.player[data-motion="lunge-swing"] {
   z-index: 6;
-  animation: player-lunge-swing 1.4s ease-in-out both;
+  animation: player-lunge-swing 1.3s ease-in-out both;
 }
 .lr-actor.player.lunge-smash,
 .lr-actor.player[data-motion="lunge-smash"] {
@@ -2070,48 +2070,65 @@ body {
     transform: translate(0, 0) scale(1);
   }
 }
-/* フルスイング：敵の目の前で止まって振りかぶ → 斬る → 戻る */
+/* フルスイング：接近 → 振りかぶ → 頭上まで振り上げ → 貯め → 戻る */
 @keyframes player-lunge-swing {
   0% {
     transform: translate(0, 0) scale(1) rotate(0deg);
   }
-  /* 接近 */
-  24% {
+  /* 接近（ここまでは立ち絵） */
+  18% {
     transform: translate(
         calc(-1 * min(56vw, 700px)),
         calc(min(14vh, 115px) + var(--aim-y, 0px))
       )
-      scale(1.04) rotate(-6deg);
+      scale(1.04) rotate(0deg);
   }
-  /* 目の前で停止しつつ振りかぶる */
-  36% {
+  /* 目の前で一度止まる */
+  24% {
     transform: translate(
         calc(-1 * min(54vw, 670px)),
-        calc(min(11vh, 90px) + var(--aim-y, 0px))
+        calc(min(12vh, 95px) + var(--aim-y, 0px))
       )
-      scale(1.06) rotate(-26deg);
+      scale(1.05) rotate(0deg);
   }
-  48% {
+  /* 後ろに振りかぶり */
+  34% {
     transform: translate(
         calc(-1 * min(52vw, 650px)),
+        calc(min(10vh, 80px) + var(--aim-y, 0px))
+      )
+      scale(1.06) rotate(-6deg);
+  }
+  /* 頭上まで振り上げ */
+  42% {
+    transform: translate(
+        calc(-1 * min(54vw, 670px)),
+        calc(min(10vh, 82px) + var(--aim-y, 0px))
+      )
+      scale(1.08) rotate(-8deg);
+  }
+  /* 貯め（力をためる） */
+  50% {
+    transform: translate(
+        calc(-1 * min(53vw, 660px)),
         calc(min(9vh, 72px) + var(--aim-y, 0px))
       )
-      scale(1.08) rotate(-34deg);
+      scale(1.1) rotate(-10deg);
   }
-  /* 斬りおろし */
-  58% {
+  62% {
     transform: translate(
-        calc(-1 * min(68vw, 860px)),
-        calc(min(18vh, 150px) + var(--aim-y, 0px))
+        calc(-1 * min(58vw, 720px)),
+        calc(min(11vh, 90px) + var(--aim-y, 0px))
       )
-      scale(1.14) rotate(24deg);
+      scale(1.14) rotate(-8deg);
   }
-  68% {
+  /* ヒット後も少しキープ */
+  72% {
     transform: translate(
-        calc(-1 * min(62vw, 780px)),
-        calc(min(15vh, 125px) + var(--aim-y, 0px))
+        calc(-1 * min(56vw, 700px)),
+        calc(min(11vh, 88px) + var(--aim-y, 0px))
       )
-      scale(1.08) rotate(8deg);
+      scale(1.1) rotate(-6deg);
   }
   /* 戻り */
   100% {

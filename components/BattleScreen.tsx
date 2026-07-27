@@ -48,6 +48,23 @@ const SP_COLORS: Record<
 };
 /** 1SPたまるまでの秒数（一定ペース） */
 const SEC_PER_SP = 4.5;
+
+/** フルスイング用コマ送り: 1→0→2→3→4→5 */
+const SWING_FRAMES = [
+  "/chara-swing-1.png", // 後ろへ振りかぶり
+  "/chara-swing-0.png", // 戻す
+  "/chara-swing-2.png", // 真下
+  "/chara-swing-3.png", // 斜め下前
+  "/chara-swing-4.png", // 前
+  "/chara-swing-5.png", // 上（頂上）
+] as const;
+/**
+ * lunge-swing と同期。
+ * 接近 → 振りかぶり → 下から振り上がる → 頂上で貯め → 戻る
+ */
+const SWING_FRAME_AT_MS = [400, 450, 500, 550, 600, 650] as const;
+/** 頭上ポーズをキープする時間（貯め）のあと立ち絵へ */
+const SWING_HOLD_END_MS = 1000;
 const PLAYER_SP_RATE = 1 / SEC_PER_SP;
 /** 1秒あたりの敵ゲージ（満タンまで約3.5秒で攻撃） */
 const ENEMY_GAUGE_RATE = 0.28;
@@ -170,6 +187,8 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
   >("idle");
   /** 同じ技連続でもアニメを再発火させる */
   const [motionNonce, setMotionNonce] = useState(0);
+  /** フルスイングのスプライトコマ（null=通常立ち絵） */
+  const [swingFrame, setSwingFrame] = useState<number | null>(null);
   /** 接近中の敵 battleId */
   const [nearEnemyId, setNearEnemyId] = useState<string | null>(null);
   /** 反撃の種類（1=反撃 / 2=復讐） */
@@ -325,6 +344,36 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
     }
     pushBattleLog("敵を選んで攻撃、自分を選んで強化・反撃！");
   }, [monster.name, enemyCount]);
+
+  /** フルスイング時のみスプライトをコマ送り（接近後から・頭上で止め） */
+  useEffect(() => {
+    if (playerMotion !== "lunge-swing") {
+      setSwingFrame(null);
+      return;
+    }
+    setSwingFrame(null);
+    const timers = [
+      ...SWING_FRAME_AT_MS.map((at, i) =>
+        window.setTimeout(() => setSwingFrame(i), at)
+      ),
+      // 貯め終わり〜戻り際は立ち絵に戻す
+      window.setTimeout(() => setSwingFrame(null), SWING_HOLD_END_MS),
+    ];
+    for (const src of SWING_FRAMES) {
+      const img = new Image();
+      img.src = src;
+    }
+    return () => {
+      for (const t of timers) window.clearTimeout(t);
+    };
+  }, [playerMotion, motionNonce]);
+
+  const playerBattleSrc =
+    clearStats || result === "win"
+      ? "/chara-victory.png"
+      : swingFrame !== null
+        ? SWING_FRAMES[swingFrame] ?? "/chara-battle.png"
+        : "/chara-battle.png";
 
   const setMenuOpenMode = (
     mode: "self" | "attack" | null,
@@ -499,8 +548,8 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
       case "slash":
         return {
           motion: "lunge-swing" as const,
-          hitMs: 800,
-          totalMs: 1400,
+          hitMs: 700,
+          totalMs: 1300,
         };
       case "heavy":
         return {
@@ -1179,12 +1228,12 @@ export default function BattleScreen({ monsterId, instanceId }: Props) {
             title="強化・反撃"
           >
             <img
-              src={clearStats || result === "win" ? "/chara-victory.png" : "/chara-battle.png"}
+              src={playerBattleSrc}
               alt="プレイヤー"
               draggable={false}
               className={`lr-battle-chara${shakePlayer ? " shake" : ""}${
                 clearStats || result === "win" ? " victory" : ""
-              }`}
+              }${swingFrame !== null ? " swinging" : ""}`}
             />
           </button>
           <div className="lr-player-meta">
